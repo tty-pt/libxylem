@@ -25,12 +25,6 @@ int _mod_run(void *sl, const char *symbol) {
 	return XY_OK;
 }
 
-#ifdef _WIN32
-#define _RTLD_DEFAULT NULL
-#else
-#define _RTLD_DEFAULT RTLD_DEFAULT
-#endif
-
 void _xy_init(void *ptr, const char *fname,
                uint64_t region_id) {
 	xy_t *ctx = ptr;

@@ -7,16 +7,10 @@
 
 #ifdef _WIN32
 #  include <windows.h>
-#  define dlopen(filename, flags) (void*)LoadLibraryA(filename)
-#  define dlsym(handle, symbol) GetProcAddress((HMODULE)handle, symbol)
-#  define dlclose(handle) FreeLibrary((HMODULE)handle)
 extern DWORD xy_err_tls;
-const char *_win_dlerror(void);
-#  define dlerror() _win_dlerror()
 #  define XY_SET_ERR(e) TlsSetValue(xy_err_tls, (LPVOID)(intptr_t)(e))
 #  define XY_GET_ERR() ((int)(intptr_t)TlsGetValue(xy_err_tls))
 #else
-#  include <dlfcn.h>
 extern int xy_err_val;
 #  define XY_SET_ERR(e) (xy_err_val = (e))
 #  define XY_GET_ERR() (xy_err_val)

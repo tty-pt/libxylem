@@ -3,6 +3,14 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
+#ifndef O_BINARY
+#define O_BINARY 0	/* MinGW open() is text-mode by default; binary for pipes/files */
+#endif
+#ifndef _WIN32
+#include <dlfcn.h>	/* dladdr/Dl_info only — address→module introspection,
+			 * distinct from the dlopen/dlsym/dlclose/dlerror quad
+			 * that now goes through libqsys's portable wrappers. */
+#endif
 
 enum opts {
 	OPT_DETACH = 1,
@@ -15,21 +23,6 @@ xy_runtime_t xy_rt = {
 
 #ifdef _WIN32
 DWORD xy_err_tls = TLS_OUT_OF_INDEXES;
-
-static char err_buf[256];
-const char *
-_win_dlerror(void)
-{
-	DWORD err_code = GetLastError();
-	if (err_code == 0)
-		return NULL;
-	memset(err_buf, 0, sizeof(err_buf));
-	FormatMessageA(
-		FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-		NULL, err_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		err_buf, sizeof(err_buf), NULL);
-	return err_buf;
-}
 #else
 int xy_err_val;
 #endif
@@ -96,14 +89,7 @@ qmap_ptr(const void *value)
 void *
 module_lookup_symbol_raw(void *handle, const char *symbol)
 {
-#ifdef _WIN32
-	void *sym = NULL;
-	FARPROC fp = GetProcAddress((HMODULE) handle, symbol);
-	memcpy(&sym, &fp, sizeof(sym));
-	return sym;
-#else
-	return dlsym(handle, symbol);
-#endif
+	return qsys_dlsym(handle, symbol);
 }
 
 int
@@ -732,7 +718,7 @@ module_free_entry(xy_mod_entry_t *entry, int close_handle)
 	free(entry);
 
 	if (close_handle && handle)
-		dlclose(handle);
+		qsys_dlclose(handle);
 	if (tmp) {
 		unlink(tmp);
 		free(tmp);
@@ -799,7 +785,7 @@ mod_load_abort(xy_load_txn_t *tx, int err)
 	}
 	module_lookup_result_free(&tx->lookup);
 	if (tx->handle) {
-		dlclose(tx->handle);
+		qsys_dlclose(tx->handle);
 		tx->handle = NULL;
 	}
 	return err;
@@ -816,10 +802,10 @@ copy_one(const char *src, const char *tmpl_in, char **out_tmp)
 	if (strlen(tmpl_in) >= sizeof(tmpl))
 		return -1;
 	strcpy(tmpl, tmpl_in);
-	out_fd = mkstemps(tmpl, 3);
+	out_fd = qsys_mkstemps(tmpl, 3);
 	if (out_fd < 0)
 		return -1;
-	in_fd = open(src, O_RDONLY);
+	in_fd = open(src, O_RDONLY | O_BINARY);
 	if (in_fd < 0)
 		goto out;
 	{
@@ -839,10 +825,13 @@ copy_one(const char *src, const char *tmpl_in, char **out_tmp)
 		if (n < 0)
 			goto out;
 	}
+#ifndef _WIN32
 	if (fchmod(out_fd, 0755) != 0)
 		goto out;
-	if (fsync(out_fd) != 0)
+#endif
+	if (qsys_fsync(out_fd) != 0)
 		goto out;
+#ifndef _WIN32
 	{
 		char *slash = strrchr(tmpl, '/');
 		if (slash) {
@@ -859,6 +848,7 @@ copy_one(const char *src, const char *tmpl_in, char **out_tmp)
 			}
 		}
 	}
+#endif
 	rc = 0;
 	*out_tmp = strdup(tmpl);
 out:
@@ -905,10 +895,10 @@ mod_load_open_handle(xy_load_txn_t *tx, char *fname)
 		return XY_ERR_INVALID;
 
 	if (xy_reloading && copy_to_tmp(tx->lookup.load_path, &tmp) == 0) {
-		tx->handle = dlopen(tmp, RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE);
+		tx->handle = qsys_dlopen(tmp, QSYS_RTLD_NODELETE);
 		if (!tx->handle) {
 			WARN("_mod_load failed loading '%s' (tmp %s): %s\n",
-			     fname, tmp, dlerror());
+			     fname, tmp, qsys_dlerror());
 			unlink(tmp);
 			free(tmp);
 			module_lookup_result_free(&tx->lookup);
@@ -916,9 +906,9 @@ mod_load_open_handle(xy_load_txn_t *tx, char *fname)
 		}
 		tx->tmp_load_path = tmp;
 	} else {
-		tx->handle = dlopen(tx->lookup.load_path, RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE);
+		tx->handle = qsys_dlopen(tx->lookup.load_path, QSYS_RTLD_NODELETE);
 		if (!tx->handle) {
-			WARN("_mod_load failed loading '%s': %s\n", fname, dlerror());
+			WARN("_mod_load failed loading '%s': %s\n", fname, qsys_dlerror());
 			module_lookup_result_free(&tx->lookup);
 			return XY_ERR_NOTFOUND;
 		}
@@ -935,7 +925,7 @@ mod_load_try_reuse_existing(xy_load_txn_t *tx)
 		return 0;
 
 	existing->refcount++;
-	dlclose(tx->handle);
+	qsys_dlclose(tx->handle);
 	tx->handle = NULL;
 	if (tx->tmp_load_path) {
 		unlink(tx->tmp_load_path);
