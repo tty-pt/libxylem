@@ -1,7 +1,7 @@
 all := libxylem
-LDLIBS-libxylem := -lqsys -lqmap
+LDLIBS-libxylem := -lqsys -lcorm
 libxylem-obj-y := src/libxylem-module.o src/libxylem-dispatch.o src/libxylem-runtime.o
-LDLIBS-libxylem-watch := -lxylem -lqsys -lqmap -lpthread
+LDLIBS-libxylem-watch := -lxylem -lqsys -lcorm -lpthread
 
 include ../mk/include.mk
 

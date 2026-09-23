@@ -59,8 +59,8 @@ typedef struct xy_region_entry {
 
 	xy_deny_entry_t         *denied_hooks;   /* hook names blocked here */
 	xy_deny_entry_t         *denied_modules; /* interned module paths blocked here */
-	unsigned                  denied_hooks_set;   /* qmap hash set: hook name -> sentinel */
-	unsigned                  denied_modules_set; /* qmap hash set: interned path ptr -> sentinel */
+	unsigned                  denied_hooks_set;   /* corm hash set: hook name -> sentinel */
+	unsigned                  denied_modules_set; /* corm hash set: interned path ptr -> sentinel */
 
 	/* Cached flags — set whenever the corresponding field becomes non-NULL/non-zero.
 	 * Propagated upward through the ancestor chain so xy_call can skip the

@@ -18,7 +18,7 @@ enum opts {
 
 xy_t xy;
 xy_runtime_t xy_rt = {
-	.mod_key_type_id = QM_MISS,
+	.mod_key_type_id = CM_MISS,
 };
 
 #ifdef _WIN32
@@ -81,7 +81,7 @@ set_current_region(uint64_t id, xy_region_entry_t *entry)
  * ------------------------------------------------------------------------- */
 
 void *
-qmap_ptr(const void *value)
+corm_ptr(const void *value)
 {
 	return value ? *(void * const *) value : NULL;
 }
@@ -157,7 +157,7 @@ module_ensure_fn_cache_cap(xy_mod_entry_t *me, int needed)
 xy_region_entry_t *
 region_lookup(uint64_t id)
 {
-	return (xy_region_entry_t *)qmap_ptr(qmap_get(region_hd, &id));
+	return (xy_region_entry_t *)corm_ptr(corm_get(region_hd, &id));
 }
 
 const char *
@@ -166,18 +166,18 @@ module_path_intern(char *path)
 	if (!path)
 		return NULL;
 	if (!path_intern_hd)
-		path_intern_hd = qmap_open(NULL, NULL, QM_STR, xy_ptr_type, MOD_MASK, 0);
+		path_intern_hd = corm_open(NULL, NULL, CM_STR, xy_ptr_type, MOD_MASK, 0);
 	if (!path_intern_hd) {
 		free(path);
 		return NULL;
 	}
-	const void *existing = qmap_get(path_intern_hd, path);
+	const void *existing = corm_get(path_intern_hd, path);
 	if (existing) {
-		const char *interned = qmap_ptr(existing);
+		const char *interned = corm_ptr(existing);
 		free(path);
 		return interned;
 	}
-	qmap_put(path_intern_hd, path, &path);
+	corm_put(path_intern_hd, path, &path);
 	return path;
 }
 
@@ -186,7 +186,7 @@ path_intern_free_all(void)
 {
 	if (!path_intern_hd)
 		return;
-	qmap_close(path_intern_hd);
+	corm_close(path_intern_hd);
 	path_intern_hd = 0;
 }
 
@@ -257,9 +257,9 @@ region_entry_free(xy_region_entry_t *e)
 	deny_list_free_owned(e->denied_hooks);
 	deny_list_free(e->denied_modules);
 	if (e->denied_hooks_set)
-		qmap_close(e->denied_hooks_set);
+		corm_close(e->denied_hooks_set);
 	if (e->denied_modules_set)
-		qmap_close(e->denied_modules_set);
+		corm_close(e->denied_modules_set);
 	for (int i = 0; i < e->hook_dispatch_cap; i++)
 		free(e->hook_dispatch[i].slots);
 	free(e->hook_dispatch);
@@ -353,7 +353,7 @@ region_ensure_root(void)
 		root->owner_path = NULL; /* host owns root */
 		root->dispatch_gen = 1;
 		root->parent     = NULL; /* root has no parent */
-		qmap_put(region_hd, &root->id, &root);
+		corm_put(region_hd, &root->id, &root);
 	}
 	/* Always sync the thread-local pointer to the current root entry */
 	if (!xy_current_region_entry || xy_current_region_id == XY_REGION_ROOT)
@@ -471,7 +471,7 @@ module_lookup_from_fname(const char *fname, uint64_t region_id)
 		return out;
 	}
 	mod_key(out.key, key_len, out.load_path, region_id);
-	out.entry = qmap_ptr(qmap_get(mod_hd, out.key));
+	out.entry = corm_ptr(corm_get(mod_hd, out.key));
 	out.err = XY_OK;
 	return out;
 }
@@ -494,23 +494,23 @@ static void
 module_rekey_region_index(xy_mod_entry_t *me, uint64_t parent_id,
                           uint64_t child_id)
 {
-	/* mod_by_region_hd is QM_MULTIVALUE; collect all entries for parent_id,
+	/* mod_by_region_hd is CM_MULTIVALUE; collect all entries for parent_id,
 	 * delete them all, re-insert all except me under parent_id, then insert
 	 * me under child_id. */
 #define MOD_BY_REGION_MAX 512
 	xy_mod_entry_t *others[MOD_BY_REGION_MAX];
 	int nothers = 0;
-	uint32_t cur = qmap_iter(mod_by_region_hd, &parent_id, 0);
+	uint32_t cur = corm_iter(mod_by_region_hd, &parent_id, 0);
 	const void *ck, *cv;
-	while (qmap_next(&ck, &cv, cur)) {
-		xy_mod_entry_t *e = qmap_ptr(cv);
+	while (corm_next(&ck, &cv, cur)) {
+		xy_mod_entry_t *e = corm_ptr(cv);
 		if (e && e != me && nothers < MOD_BY_REGION_MAX)
 			others[nothers++] = e;
 	}
-	qmap_del_all(mod_by_region_hd, &parent_id);
+	corm_del_all(mod_by_region_hd, &parent_id);
 	for (int oi = 0; oi < nothers; oi++)
-		qmap_put(mod_by_region_hd, &parent_id, &others[oi]);
-	qmap_put(mod_by_region_hd, &child_id, &me);
+		corm_put(mod_by_region_hd, &parent_id, &others[oi]);
+	corm_put(mod_by_region_hd, &child_id, &me);
 #undef MOD_BY_REGION_MAX
 }
 
@@ -529,8 +529,8 @@ module_rekey_loaded_entry(xy_mod_entry_t *me, const char *old_key,
 		return;
 	mod_key(new_key, new_key_len, load_path, child_id);
 	me->region_id = child_id;
-	qmap_put(mod_hd, new_key, &me);
-	qmap_del(mod_hd, old_key);
+	corm_put(mod_hd, new_key, &me);
+	corm_del(mod_hd, old_key);
 	memcpy(me->mod_key, new_key, new_key_len);
 	free(new_key);
 	module_rekey_region_index(me, parent_id, child_id);
@@ -581,7 +581,7 @@ module_remove_denies(xy_region_entry_t *re, const char *path)
 			xy_deny_entry_t *dead = *pp;
 			*pp = dead->next;
 			if (re->denied_modules_set)
-				qmap_del(re->denied_modules_set, &dead->value);
+				corm_del(re->denied_modules_set, &dead->value);
 			free(dead);
 		} else {
 			pp = &(*pp)->next;
@@ -594,7 +594,7 @@ module_is_denied(xy_region_entry_t *re, const char *path)
 {
 	if (!re || !path)
 		return 0;
-	if (re->denied_modules_set && qmap_get(re->denied_modules_set, &path))
+	if (re->denied_modules_set && corm_get(re->denied_modules_set, &path))
 		return 1;
 	for (xy_deny_entry_t *d = re->denied_modules; d; d = d->next) {
 		if (d->value == path)
@@ -668,10 +668,10 @@ module_clear_fn_cache_for_handle(xy_mod_entry_t *entry)
 	if (!base)
 		return;
 
-	unsigned c = qmap_iter(mod_hd, NULL, 0);
+	unsigned c = corm_iter(mod_hd, NULL, 0);
 	const void *key, *value;
-	while (qmap_next(&key, &value, c)) {
-		xy_mod_entry_t *m = qmap_ptr(value);
+	while (corm_next(&key, &value, c)) {
+		xy_mod_entry_t *m = corm_ptr(value);
 		if (!m || m == entry) continue;
 		for (int i = 0; i < m->fn_cache_cap; i++) {
 			void *fp = m->fn_cache[i];
@@ -760,8 +760,8 @@ mod_load_abort(xy_load_txn_t *tx, int err)
 		}
 	}
 	if (tx->published_entry && tx->mod_entry) {
-		qmap_del(mod_by_region_hd, &tx->mod_entry->region_id);
-		qmap_del(mod_hd, tx->mod_entry->mod_key);
+		corm_del(mod_by_region_hd, &tx->mod_entry->region_id);
+		corm_del(mod_hd, tx->mod_entry->mod_key);
 	}
 	if (tx->mod_entry) {
 		tmp = tx->mod_entry->tmp_load_path;
@@ -969,8 +969,8 @@ mod_load_alloc_entry(xy_load_txn_t *tx, char *fname)
 int
 mod_load_publish_entry(xy_load_txn_t *tx)
 {
-	qmap_put(mod_hd, tx->stable_key, &tx->mod_entry);
-	qmap_put(mod_by_region_hd, &tx->mod_entry->region_id, &tx->mod_entry);
+	corm_put(mod_hd, tx->stable_key, &tx->mod_entry);
+	corm_put(mod_by_region_hd, &tx->mod_entry->region_id, &tx->mod_entry);
 	tx->published_entry = 1;
 	return XY_OK;
 }
@@ -1119,12 +1119,12 @@ module_remove_path_owned_entries(xy_region_entry_t *re, const char *path,
 /*
  * Variable-length key type for mod_hd.
  *
- * Keys are "path\0<16-hex-region>" — the embedded NUL means QM_STR would
+ * Keys are "path\0<16-hex-region>" — the embedded NUL means CM_STR would
  * truncate to just the path, making all regions of the same .so collide.
- * qmap_mreg registers a type whose measure callback returns the full key
+ * corm_mreg registers a type whose measure callback returns the full key
  * length (strlen stops at the NUL, giving path length; adding
  * MOD_KEY_SUFFIX_LEN accounts for the NUL + 16 hex chars).
- * qmap then hashes/compares via memcmp over the full blob, correctly
+ * corm then hashes/compares via memcmp over the full blob, correctly
  * distinguishing (path, region_A) from (path, region_B).
  */
 size_t
@@ -1281,7 +1281,7 @@ _xy_claim_for_load(const char *caller, uint64_t parent_id,
 	child->owner_path = caller;
 	child->dispatch_gen = 1;
 	child->parent     = parent;
-	qmap_put(region_hd, &child->id, &child);
+	corm_put(region_hd, &child->id, &child);
 
 	/* Wire child into parent's children list */
 	child->sibling_next   = (xy_region_entry_t *)parent->children_head;
@@ -1323,11 +1323,11 @@ int xy_deny(const char *what, xy_deny_type_t type) {
 		node->next = reg->denied_hooks;
 		reg->denied_hooks = node;
 		if (!reg->denied_hooks_set)
-			reg->denied_hooks_set = qmap_open(NULL, NULL, QM_STR,
+			reg->denied_hooks_set = corm_open(NULL, NULL, CM_STR,
 			                                  xy_ptr_type, MOD_MASK, 0);
 		{
 			void *sentinel = (void *)(uintptr_t)1;
-			qmap_put(reg->denied_hooks_set, node->value, &sentinel);
+			corm_put(reg->denied_hooks_set, node->value, &sentinel);
 		}
 	} else {
 			char *path = module_load_path(what);
@@ -1346,11 +1346,11 @@ int xy_deny(const char *what, xy_deny_type_t type) {
 		node->next = reg->denied_modules;
 		reg->denied_modules = node;
 		if (!reg->denied_modules_set)
-			reg->denied_modules_set = qmap_open(NULL, NULL, xy_ptr_type,
+			reg->denied_modules_set = corm_open(NULL, NULL, xy_ptr_type,
 			                                    xy_ptr_type, MOD_MASK, 0);
 		{
 			void *sentinel = (void *)(uintptr_t)1;
-			qmap_put(reg->denied_modules_set, &node->value, &sentinel);
+			corm_put(reg->denied_modules_set, &node->value, &sentinel);
 		}
 	}
 	region_propagate_deny(reg);

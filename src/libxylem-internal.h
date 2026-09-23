@@ -22,7 +22,7 @@ extern int xy_err_val;
 #include <stdint.h>
 
 #include <ttypt/qsys.h>
-#include <ttypt/qmap.h>
+#include <ttypt/corm.h>
 
 #include "papi.h"
 
@@ -89,7 +89,7 @@ extern __thread xy_mod_entry_t    *xy_loading_mod;
 extern __thread xy_t              *xy_pending_ctx;
 
 void set_current_region(uint64_t id, xy_region_entry_t *entry);
-void *qmap_ptr(const void *value);
+void *corm_ptr(const void *value);
 void *module_lookup_symbol_raw(void *handle, const char *symbol);
 int module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t fn_size);
 void xy_zero_ret(void *retp, const xy_adapter_t *reg);

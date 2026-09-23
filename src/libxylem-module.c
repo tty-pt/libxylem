@@ -157,13 +157,13 @@ _mod_unload(char *fname, uint64_t region_id)
 	 * _mod_unload on a child with refcount > 1 simply decrements its
 	 * refcount and leaves it active — so shared children are safe. */
 	{
-		unsigned c = qmap_iter(mod_hd, NULL, 0);
+		unsigned c = corm_iter(mod_hd, NULL, 0);
 		const void *key, *value;
 		/* Collect children first to avoid iterator invalidation */
 		xy_mod_entry_t **children = NULL;
 		int nchildren = 0, children_cap = 0;
-		while (qmap_next(&key, &value, c)) {
-			xy_mod_entry_t *m = qmap_ptr(value);
+		while (corm_next(&key, &value, c)) {
+			xy_mod_entry_t *m = corm_ptr(value);
 			if (m && m != entry && m->parent_entry == entry) {
 				if (nchildren >= children_cap) {
 					children_cap = children_cap ? children_cap * 2 : 8;
@@ -196,8 +196,8 @@ _mod_unload(char *fname, uint64_t region_id)
 	module_region_detach(entry);
 
 	/* Remove from hash maps */
-	qmap_del(mod_by_region_hd, &entry->region_id);
-	qmap_del(mod_hd, entry->mod_key);
+	corm_del(mod_by_region_hd, &entry->region_id);
+	corm_del(mod_hd, entry->mod_key);
 
 	xy_mod_count--;
 
