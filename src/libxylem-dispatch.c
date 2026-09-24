@@ -79,9 +79,9 @@ fn_cache_prewarm(xy_mod_entry_t *me)
 	if (needed <= 0) return 0;
 	if (module_ensure_fn_cache_cap(me, needed + 16) < 0) return -1;
 	/* Iterate hook_id_hd (name → hook_id) and dlsym each in this module */
-	unsigned c = qmap_iter(hook_id_hd, NULL, 0);
+	unsigned c = corm_iter(hook_id_hd, NULL, 0);
 	const void *key, *value;
-	while (qmap_next(&key, &value, c)) {
+	while (corm_next(&key, &value, c)) {
 		const char *name = key;
 		int hook_id = *(const int *)value;
 		if (hook_id < 0 || hook_id >= me->fn_cache_cap) continue;
@@ -203,6 +203,7 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 	}
 
 	int pre_err = XY_GET_ERR();
+	(void)pre_err;
 	int hook_id = reg->hook_id;
 	void (*dispatch_call)(void *, void *, void *) = reg->call;
 	uint64_t region_id = xy_current_region_id;
@@ -212,7 +213,7 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 	unsigned ran = 0;
 
 	if (unlikely(hook_id < 0)) {
-		const void *hid_v = qmap_get(hook_id_hd, reg->name);
+		const void *hid_v = corm_get(hook_id_hd, reg->name);
 		if (!hid_v) {
 			ret = XY_ERR_NOTFOUND;
 			goto fail;
@@ -255,7 +256,7 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 	if (unlikely(sflags & XY_SUBTREE_SECURITY_MASK)) {
 		for (int i = 0; i < anc_n; i++) {
 			if (anc_chain[i]->denied_hooks_set &&
-			    qmap_get(anc_chain[i]->denied_hooks_set, reg->name)) {
+			    corm_get(anc_chain[i]->denied_hooks_set, reg->name)) {
 				ret = XY_ERR_EPERM;
 				goto fail;
 			}
@@ -289,35 +290,59 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 
 		xy_dispatch_slot_t *slots = cache->slots;
 		int n = cache->count;
-		for (int mi = 0; mi < n; mi++) {
-			xy_mod_entry_t *me = slots[mi].me;
-			if (mi + 1 < n)
-				__builtin_prefetch(&slots[mi + 1], 0, 1);
-			if (!me || !me->ctx || !slots[mi].cb)
-				continue;
-			xy_t *ctx = me->ctx;
-			ctx->adapter = reg;
-			ctx->region_state = me->region_state;
+		if (likely(n == 1)) {
+			xy_mod_entry_t *me = slots[0].me;
+			if (likely(me && me->ctx && slots[0].cb)) {
+				xy_t *ctx = me->ctx;
+				ctx->adapter = reg;
+				ctx->region_state = me->region_state;
 
-			xy_region_entry_t *prev_rentry = xy_current_region_entry;
-			uint64_t region_changed = (ctx->region_id != region_id);
-			if (unlikely(region_changed))
-				set_current_region(ctx->region_id, me->region_entry);
+				uint64_t region_changed = (ctx->region_id != region_id);
+				if (unlikely(region_changed)) {
+					xy_region_entry_t *prev_rentry = xy_current_region_entry;
+					set_current_region(ctx->region_id, me->region_entry);
+					dispatch_call(retp, slots[0].cb, arg);
+					set_current_region(region_id, prev_rentry);
+				} else {
+					dispatch_call(retp, slots[0].cb, arg);
+				}
+				ran = 1;
+			}
+		} else {
+			for (int mi = 0; mi < n; mi++) {
+				xy_mod_entry_t *me = slots[mi].me;
+				if (mi + 1 < n)
+					__builtin_prefetch(&slots[mi + 1], 0, 1);
+				if (!me || !me->ctx || !slots[mi].cb)
+					continue;
+				xy_t *ctx = me->ctx;
+				ctx->adapter = reg;
+				ctx->region_state = me->region_state;
 
-			dispatch_call(retp, slots[mi].cb, arg);
+				xy_region_entry_t *prev_rentry = xy_current_region_entry;
+				uint64_t region_changed = (ctx->region_id != region_id);
+				if (unlikely(region_changed))
+					set_current_region(ctx->region_id, me->region_entry);
 
-			if (unlikely(region_changed))
-				set_current_region(region_id, prev_rentry);
-			ran++;
+				dispatch_call(retp, slots[mi].cb, arg);
+
+				if (unlikely(region_changed))
+					set_current_region(region_id, prev_rentry);
+				ran++;
+			}
 		}
 	}
 
 	xy_last_ran = ran;
-	xy_set_last_ret(ran ? retp : NULL, reg->ret_size);
-	if (!ran && retp)
-		memset(retp, 0, reg->ret_size);
-	if (pre_err != XY_OK && XY_GET_ERR() == pre_err)
-		XY_SET_ERR(XY_OK);
+	if (!ran) {
+		xy_set_last_ret(NULL, reg->ret_size);
+		if (retp)
+			memset(retp, 0, reg->ret_size);
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
+	}
+	xy_set_last_ret(retp, reg->ret_size);
+	XY_SET_ERR(XY_OK);
 	return XY_OK;
 
 fail:
@@ -345,15 +370,15 @@ xy_areg(char *name, xy_adapter_t *adapter)
 		XY_SET_ERR(XY_ERR_TOOBIG);
 		return XY_INVALID;
 	}
-	const unsigned *existing = qmap_get(sica_hd, name);
+	const unsigned *existing = corm_get(sica_hd, name);
 	if (existing) {
 		unsigned id = *existing;
 	    return id;
 	}
-	qmap_put(sica_hd, name, &adapter);
+	corm_put(sica_hd, name, &adapter);
 	/* Assign a monotonic hook ID for the fn_cache index */
 	int hook_id = xy_hook_id_counter++;
-	qmap_put(hook_id_hd, name, &hook_id);
+	corm_put(hook_id_hd, name, &hook_id);
 	/* Write the ID back into the adapter so callers can skip the hash lookup */
 	adapter->hook_id = hook_id;
 	/* Grow adapter-by-id array and store pointer */
@@ -374,10 +399,10 @@ xy_areg(char *name, xy_adapter_t *adapter)
 	/* T1.1: a new hook ID has been minted — eagerly resolve it in every
 	 * already-loaded module so the first dispatch finds it cached. */
 	if (mod_hd) {
-		unsigned c = qmap_iter(mod_hd, NULL, 0);
+		unsigned c = corm_iter(mod_hd, NULL, 0);
 		const void *k, *v;
-		while (qmap_next(&k, &v, c)) {
-			xy_mod_entry_t *m = qmap_ptr(v);
+		while (corm_next(&k, &v, c)) {
+			xy_mod_entry_t *m = corm_ptr(v);
 			if (m) (void)fn_cache_prewarm(m);
 		}
 	}

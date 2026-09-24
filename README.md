@@ -1,41 +1,102 @@
 # libxylem
 
-A small C library for hook-based extensibility and dynamic module loading.
+[![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
+[![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
+[![Hook modules](https://img.shields.io/badge/hook-modules-4B8BBE)](#)
 
-The host program defines **hooks** — typed dispatch points — and loads **modules** (shared libraries) that implement them. Calling a hook dispatches to every loaded module that provides it. Modules can load other modules, deny hooks, intercept calls, and claim isolated address regions.
+> Hook-based extensibility and dynamic module loading.
 
----
+A small C library for hook-based extensibility and dynamic module loading. The
+host program defines **hooks** — typed dispatch points — and loads **modules**
+(shared libraries) that implement them. Calling a hook dispatches to every
+loaded module that provides it. Modules can load other modules, deny hooks,
+intercept calls, and claim isolated address regions.
 
-## Installation
+## Contents
 
-See [these instructions](https://github.com/tty-pt/ci/blob/main/docs/install.md#install-ttypt-packages) and use `libxylem` as the package name.
+- [Features](#features)
+- [Install](#install)
+- [Build from source](#build-from-source)
+- [Concepts](#concepts)
+- [Quick start](#quick-start)
+- [API reference](#api-reference)
+- [Region walkthrough](#region-walkthrough)
+- [Testing](#testing)
+- [License](#license)
 
----
+## Features
+
+- **Hooks** — named, typed dispatch points any number of modules can implement
+- **Dynamic module loading** — `.so`/`.dll` modules with a one-time
+  `xy_install()` entry point
+- **Regions** — isolated namespaces constraining dispatch within the module graph
+- **Module isolation** — `xy_deny`, `xy_claim`, `xy_require_claim`
+- **Interceptors** — planned middleware for hooks
+- **Pledges** — planned caller restrictions per hook
+
+## Install
+
+Prebuilt packages are distributed from tty.pt for Linux (APT / Alpine / Arch /
+Fedora-RHEL), macOS (Homebrew), Windows (winget / MSYS2), and OpenBSD. Follow
+the [installation instructions](https://github.com/tty-pt/ci/blob/main/docs/install.md)
+and use **libxylem** as the package name.
+
+## Build from source
+
+The library builds with a plain `make` (the shared [`mk` include.mk](https://github.com/tty-pt/mk)):
+
+```sh
+make                  # builds lib/libxylem.so
+make test             # run the in-tree test suite
+sudo make install     # lib + headers + xylem.pc → $(PREFIX), default /usr/local
+```
+
+Link it from your own C code:
+
+```sh
+cc my_app.c $(pkg-config --cflags --libs xylem) -pthread
+```
+
+**Dependencies:** `libqsys`, `libcorm` (and `-pthread` when linking a host).
 
 ## Concepts
 
 ### Hooks
 
-A hook is a named, typed function that any number of modules can implement. The host declares the hook's signature once; each module that wants to handle it provides an implementation. When the hook is called, all implementing modules run.
+A hook is a named, typed function that any number of modules can implement.
+The host declares the hook's signature once; each module that wants to handle
+it provides an implementation. When the hook is called, all implementing
+modules run.
 
 ### `XY_DECL` vs `XY_DEF` vs `XY_IMPL`
 
-- **`XY_DECL`** — goes in shared headers. Declares a hook that callers invoke as a normal function.
-- **`XY_DEF`** — goes in one host `.c` file. Emits the canonical adapter for that hook and provides the same normal-function call syntax in that translation unit.
-- **`XY_IMPL`** — goes in module `.c` files. Registers a module-side listener implementation for a hook.
+- **`XY_DECL`** — goes in shared headers. Declares a hook that callers invoke
+  as a normal function.
+- **`XY_DEF`** — goes in one host `.c` file. Emits the canonical adapter for
+  that hook and provides the same normal-function call syntax in that
+  translation unit.
+- **`XY_IMPL`** — goes in module `.c` files. Registers a module-side listener
+  implementation for a hook.
 
 ### Host vs Module
 
-- The **host** is the main executable. It defines hooks with `XY_DEF`, loads modules with `xy_load`, and dispatches by calling the hook function directly.
-- A **module** is a shared library (`.so`/`.dll`). It includes `<ttypt/xy-mod.h>`, implements hooks with `XY_IMPL`, and exports `xy_install()` which is called once on first load.
+- The **host** is the main executable. It defines hooks with `XY_DEF`, loads
+  modules with `xy_load`, and dispatches by calling the hook function directly.
+- A **module** is a shared library (`.so`/`.dll`). It includes
+  `<ttypt/xy-mod.h>`, implements hooks with `XY_IMPL`, and exports
+  `xy_install()` which is called once on first load.
 
 ### Regions
 
-Regions are isolated namespaces within the module graph. A `call_*` dispatches only to modules whose region is a descendant-or-equal of the caller's current region. The root region (region 0) reaches every module.
+Regions are isolated namespaces within the module graph. A `call_*` dispatches
+only to modules whose region is a descendant-or-equal of the caller's current
+region. The root region (region 0) reaches every module.
 
-A module opts into having its own region by calling `xy_claim(bits)` from `xy_install()`. The parent region must have a claim handler registered via `xy_require_claim`; without one, `xy_claim` always fails. Once claimed, all subsequent `xy_load`, `xy_deny`, `xy_intercept`, and `xy_pledge` calls from that module operate on the new child region.
-
----
+A module opts into having its own region by calling `xy_claim(bits)` from
+`xy_install()`. The parent region must have a claim handler registered via
+`xy_require_claim`; without one, `xy_claim` always fails. Once claimed, all
+subsequent `xy_load`, `xy_deny`, `xy_intercept`, and `xy_pledge` calls from
+that module operate on the new child region.
 
 ## Quick start
 
@@ -88,9 +149,7 @@ cc -o host host.c -lxylem -pthread
 cc -o mods/combat_log.so mods/combat_log.c -fPIC -shared -lxylem
 ```
 
----
-
-## API Reference
+## API reference
 
 ### Macros
 
@@ -130,7 +189,8 @@ XY_IMPL(int, on_tick, int, dt)
 
 #### `XY_CALL(retp, fname, ...)`
 
-Dispatches the hook to all eligible modules. `retp` receives the return value of the last module that ran (zero-initialised if none ran).
+Dispatches the hook to all eligible modules. `retp` receives the return value
+of the last module that ran (zero-initialised if none ran).
 
 ```c
 int result;
@@ -141,15 +201,15 @@ In module context, hook calls use the normal function form as well; the
 generated inline dispatch routes through the injected `xy` context and sets
 the caller identity correctly.
 
----
-
 ### Lifecycle
 
 #### `int xy_load(char *fname)`
 
-Load a module into the caller's current region. `fname` is the path to the shared library, without the `.so`/`.dll` extension.
+Load a module into the caller's current region. `fname` is the path to the
+shared library, without the `.so`/`.dll` extension.
 
-On first load, `xy_install()` is called. Subsequent loads of the same path into the same region are no-ops.
+On first load, `xy_install()` is called. Subsequent loads of the same path
+into the same region are no-ops.
 
 Returns `XY_OK` on success, negative on failure.
 
@@ -159,13 +219,13 @@ xy_load("mods/combat_log");
 
 #### `void xy_shutdown(void)`
 
-Unload all modules and free resources. After this, `xy_load` can be called again.
+Unload all modules and free resources. After this, `xy_load` can be called
+again.
 
 #### `void xy_init(void)`
 
-Explicit initialisation. Called automatically on first use; only needed if you want to control when initialisation happens.
-
----
+Explicit initialisation. Called automatically on first use; only needed if
+you want to control when initialisation happens.
 
 ### Errors
 
@@ -194,17 +254,17 @@ if (r != XY_OK)
 | `XY_ERR_INIT` | -4 | Initialisation failed |
 | `XY_ERR_EPERM` | -5 | Not permitted (pledge or claim violation) |
 
----
-
 ### Pledge
 
-> **⚠️ Not yet implemented.** The `xy_ctx` struct reserves a `pledge` slot for ABI
-> compatibility, but the runtime dispatch logic does not enforce pledges yet.
-> This section describes the planned semantics.
+> **⚠️ Not yet implemented.** The `xy_ctx` struct reserves a `pledge` slot for
+> ABI compatibility, but the runtime dispatch logic does not enforce pledges
+> yet. This section describes the planned semantics.
 
 #### `int xy_pledge(const char *hook_name)`
 
-Restrict who may call a hook. The first module to pledge a hook name within its region becomes the sole permitted caller of that hook in that region. Any other caller attempting to dispatch the hook receives `XY_ERR_EPERM`.
+Restrict who may call a hook. The first module to pledge a hook name within
+its region becomes the sole permitted caller of that hook in that region. Any
+other caller attempting to dispatch the hook receives `XY_ERR_EPERM`.
 
 Must be called from `xy_install()`.
 
@@ -215,16 +275,16 @@ A second pledge for the same hook in the same region returns `XY_ERR_EPERM`.
 xy_pledge("get_token");
 ```
 
----
-
 ### Regions
 
-All region functions operate on the caller's **current region**, set implicitly by the dispatch and load machinery. There are no explicit region-ID parameters.
+All region functions operate on the caller's **current region**, set
+implicitly by the dispatch and load machinery. There are no explicit region-ID
+parameters.
 
 #### `XY_MODULE_API uint8_t xy_claim = N`
 
-Module-side region declaration. A module opts into having its own sub-region by
-exporting this data symbol with the requested bit-width `N`.
+Module-side region declaration. A module opts into having its own sub-region
+by exporting this data symbol with the requested bit-width `N`.
 
 This is a **data symbol**, not a function. The host reads it at load time via
 `dlsym`. If the parent region has a claim handler installed (via
@@ -234,7 +294,8 @@ module loads flat into the parent's region.
 
 On success:
 - The module's region becomes the newly created child of the parent.
-- All subsequent `xy_load`, `xy_deny`, `xy_require_claim` calls operate on the child region.
+- All subsequent `xy_load`, `xy_deny`, `xy_require_claim` calls operate on the
+  child region.
 
 ```c
 // mods/sub_mod.c
@@ -249,11 +310,17 @@ void xy_install(void)
 
 #### `int xy_require_claim(xy_claim_handler_fn_t *fn, void *ud)`
 
-Register a claim handler on the caller's current region and enforce the claim contract. Only one handler per region; a second non-NULL call replaces the first.
+Register a claim handler on the caller's current region and enforce the claim
+contract. Only one handler per region; a second non-NULL call replaces the
+first.
 
-When `fn` is non-NULL: any `xy_load()` into this region whose module exports no `xy_claim` symbol is rejected immediately (`xy_install` never runs) and `xy_load` returns `XY_ERR_EPERM`. When the symbol is present, `fn` is invoked to approve or deny before `xy_install` runs.
+When `fn` is non-NULL: any `xy_load()` into this region whose module exports
+no `xy_claim` symbol is rejected immediately (`xy_install` never runs) and
+`xy_load` returns `XY_ERR_EPERM`. When the symbol is present, `fn` is invoked
+to approve or deny before `xy_install` runs.
 
-When both `fn` and `ud` are NULL: clears the gate — subsequent loads no longer require `xy_claim`.
+When both `fn` and `ud` are NULL: clears the gate — subsequent loads no longer
+require `xy_claim`.
 
 ```c
 typedef int xy_claim_handler_fn_t(
@@ -264,7 +331,8 @@ typedef int xy_claim_handler_fn_t(
 );
 ```
 
-Return `XY_OK` to approve (with `*granted_bits` set), or `XY_ERR_EPERM` to reject.
+Return `XY_OK` to approve (with `*granted_bits` set), or `XY_ERR_EPERM` to
+reject.
 
 ```c
 static int my_handler(const char *path, uint8_t req,
@@ -284,7 +352,9 @@ void xy_install(void)
 
 #### `int xy_deny(const char *what, xy_deny_type_t type)`
 
-Block a hook or module within the caller's current region and all its descendants. The denial applies to the caller's own region as well — any call dispatched from within the denying region (or any descendant) is affected.
+Block a hook or module within the caller's current region and all its
+descendants. The denial applies to the caller's own region as well — any call
+dispatched from within the denying region (or any descendant) is affected.
 
 `type` is one of:
 
@@ -307,7 +377,10 @@ xy_deny("mods/untrusted", XY_DENY_MODULE);
 > for ABI compatibility, but the dispatch loop does not call interceptors yet.
 > This section describes the planned semantics.
 
-Register a middleware interceptor for `hook_name` in the caller's current region. Interceptors run outermost-first (root region before child regions). Each interceptor may inspect or modify arguments and the return value, call `next` to continue, or return early to block.
+Register a middleware interceptor for `hook_name` in the caller's current
+region. Interceptors run outermost-first (root region before child regions).
+Each interceptor may inspect or modify arguments and the return value, call
+`next` to continue, or return early to block.
 
 ```c
 typedef int xy_interceptor_fn_t(
@@ -339,9 +412,13 @@ void xy_install(void)
 
 #### `int xy_region_each(xy_region_each_fn_t *fn, void *ud)`
 
-Enumerate immediate child regions of the caller's current region. Calls `fn(child_id, ud)` for each child. `child_id` is an opaque `uint64_t` — it is provided for diagnostic and logging purposes only.
+Enumerate immediate child regions of the caller's current region. Calls
+`fn(child_id, ud)` for each child. `child_id` is an opaque `uint64_t` — it is
+provided for diagnostic and logging purposes only.
 
-Return `XY_OK` from `fn` to continue, any other value to stop. `xy_region_each` returns the last value returned by `fn`, or `XY_OK` if there were no children.
+Return `XY_OK` from `fn` to continue, any other value to stop.
+`xy_region_each` returns the last value returned by `fn`, or `XY_OK` if there
+were no children.
 
 ```c
 typedef int xy_region_each_fn_t(uint64_t child_id, void *ud);
@@ -360,18 +437,19 @@ xy_region_each(print_child, NULL);
 
 #### `xy_my_region()`
 
-Macro. Returns the `uint64_t` region ID assigned to the calling module. Available in module context only (requires `<ttypt/xy-mod.h>`). Intended for diagnostic use.
+Macro. Returns the `uint64_t` region ID assigned to the calling module.
+Available in module context only (requires `<ttypt/xy-mod.h>`). Intended for
+diagnostic use.
 
 ```c
 fprintf(stderr, "my region: %016llx\n",
         (unsigned long long)xy_my_region());
 ```
 
----
-
 ## Region walkthrough
 
-This example shows a moderator module that controls a child region, an interceptor, and a deny.
+This example shows a moderator module that controls a child region, an
+interceptor, and a deny.
 
 **Shared hook header** (`game_hooks.h`):
 
@@ -456,5 +534,19 @@ int main(void)
 ```
 
 When `call_on_tick(100)` is dispatched from root:
-1. The halving interceptor (registered in moderator's region) fires first, setting `dt = 50`.
+1. The halving interceptor (registered in moderator's region) fires first,
+   setting `dt = 50`.
 2. The worker's `on_tick` runs with `dt = 50`.
+
+## Testing
+
+```sh
+make test     # builds + runs the validation bins over XY_DECL/DEF/IMPL, regions…
+```
+
+From the repository root, `make boundary-check` runs the module-layer gates,
+and `make test` runs the full platform suite.
+
+## License
+
+BSD 2-Clause License. Copyright (c) 2025, tty-pt. See `LICENSE`.

@@ -2,9 +2,13 @@
 #include <stdio.h>
 
 static void _dbg(const char *msg) {
+#ifdef XY_DEBUG_LOG
 	FILE *f = fopen("/tmp/xy_bind.log", "a");
 	if (!f) f = fopen("tmp/xy_bind.log", "a");
 	if (f) { fputs(msg, f); fclose(f); }
+#else
+	(void)msg;
+#endif
 }
 
 int _mod_run(void *sl, const char *symbol) {
@@ -20,12 +24,6 @@ int _mod_run(void *sl, const char *symbol) {
 	((mod_cb_t) cb)();
 	return XY_OK;
 }
-
-#ifdef _WIN32
-#define _RTLD_DEFAULT NULL
-#else
-#define _RTLD_DEFAULT RTLD_DEFAULT
-#endif
 
 void _xy_init(void *ptr, const char *fname,
                uint64_t region_id) {
@@ -159,13 +157,13 @@ _mod_unload(char *fname, uint64_t region_id)
 	 * _mod_unload on a child with refcount > 1 simply decrements its
 	 * refcount and leaves it active — so shared children are safe. */
 	{
-		unsigned c = qmap_iter(mod_hd, NULL, 0);
+		unsigned c = corm_iter(mod_hd, NULL, 0);
 		const void *key, *value;
 		/* Collect children first to avoid iterator invalidation */
 		xy_mod_entry_t **children = NULL;
 		int nchildren = 0, children_cap = 0;
-		while (qmap_next(&key, &value, c)) {
-			xy_mod_entry_t *m = qmap_ptr(value);
+		while (corm_next(&key, &value, c)) {
+			xy_mod_entry_t *m = corm_ptr(value);
 			if (m && m != entry && m->parent_entry == entry) {
 				if (nchildren >= children_cap) {
 					children_cap = children_cap ? children_cap * 2 : 8;
@@ -198,8 +196,8 @@ _mod_unload(char *fname, uint64_t region_id)
 	module_region_detach(entry);
 
 	/* Remove from hash maps */
-	qmap_del(mod_by_region_hd, &entry->region_id);
-	qmap_del(mod_hd, entry->mod_key);
+	corm_del(mod_by_region_hd, &entry->region_id);
+	corm_del(mod_hd, entry->mod_key);
 
 	xy_mod_count--;
 
@@ -222,6 +220,8 @@ int xy_unload(char *fname) {
 	XY_SET_ERR(ret);
 	return ret;
 }
+
+extern int xy_reloading;
 
 int xy_reload(char *fname) {
 	int enter_ret = xy_runtime_ensure();
@@ -256,8 +256,11 @@ int xy_reload(char *fname) {
 		return uret;
 	}
 
-	/* Load the module again */
+	/* Load the module again — use unique inode to bypass glibc cache */
+	extern int xy_reloading;
+	xy_reloading = 1;
 	int lret = _mod_load(fname);
+	xy_reloading = 0;
 	if (lret != XY_OK) {
 		XY_SET_ERR(lret);
 		return lret;

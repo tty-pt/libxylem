@@ -7,16 +7,10 @@
 
 #ifdef _WIN32
 #  include <windows.h>
-#  define dlopen(filename, flags) (void*)LoadLibraryA(filename)
-#  define dlsym(handle, symbol) GetProcAddress((HMODULE)handle, symbol)
-#  define dlclose(handle) FreeLibrary((HMODULE)handle)
 extern DWORD xy_err_tls;
-const char *_win_dlerror(void);
-#  define dlerror() _win_dlerror()
 #  define XY_SET_ERR(e) TlsSetValue(xy_err_tls, (LPVOID)(intptr_t)(e))
 #  define XY_GET_ERR() ((int)(intptr_t)TlsGetValue(xy_err_tls))
 #else
-#  include <dlfcn.h>
 extern int xy_err_val;
 #  define XY_SET_ERR(e) (xy_err_val = (e))
 #  define XY_GET_ERR() (xy_err_val)
@@ -28,7 +22,7 @@ extern int xy_err_val;
 #include <stdint.h>
 
 #include <ttypt/qsys.h>
-#include <ttypt/qmap.h>
+#include <ttypt/corm.h>
 
 #include "papi.h"
 
@@ -95,14 +89,38 @@ extern __thread xy_mod_entry_t    *xy_loading_mod;
 extern __thread xy_t              *xy_pending_ctx;
 
 void set_current_region(uint64_t id, xy_region_entry_t *entry);
-void *qmap_ptr(const void *value);
+void *corm_ptr(const void *value);
 void *module_lookup_symbol_raw(void *handle, const char *symbol);
 int module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t fn_size);
 void xy_zero_ret(void *retp, const xy_adapter_t *reg);
-void xy_set_last_ret(const void *retp, size_t ret_size);
-int module_ensure_hook_impl_words(xy_mod_entry_t *me, int hook_id);
+static inline void __attribute__((always_inline))
+xy_set_last_ret(const void *retp, size_t ret_size)
+{
+	if (likely(retp && ret_size > 0)) {
+		if (likely(ret_size <= sizeof(uint64_t))) {
+			uint64_t v = 0;
+			memcpy(&v, retp, ret_size);
+			memcpy(xy_last_retbuf, &v, sizeof(uint64_t));
+		} else {
+			memcpy(xy_last_retbuf, retp, ret_size);
+		}
+		xy_last_retp = xy_last_retbuf;
+	} else {
+		xy_last_retp = NULL;
+	}
+}
+
+static inline int __attribute__((always_inline))
+module_has_hook_implemented(const xy_mod_entry_t *me, int hook_id)
+{
+	if (unlikely(!me || hook_id < 0))
+		return 0;
+	int word = hook_id / 64;
+	if (unlikely(word >= me->hook_impl_words))
+		return 0;
+	return (me->hook_impl_bits[word] & ((uint64_t)1 << (hook_id % 64))) != 0;
+}
 void module_mark_hook_implemented(xy_mod_entry_t *me, int hook_id);
-int module_has_hook_implemented(const xy_mod_entry_t *me, int hook_id);
 int module_ensure_fn_cache_cap(xy_mod_entry_t *me, int needed);
 xy_region_entry_t *region_lookup(uint64_t id);
 const char *module_path_intern(char *path);
@@ -143,6 +161,7 @@ typedef struct {
 	char               *stable_fname;
 	char               *stable_key;
 	const char         *interned_load_path;
+	char               *tmp_load_path;
 	xy_mod_entry_t    *mod_entry;
 	xy_region_entry_t *inherited_reg;
 	uint64_t            inherited_region_id;

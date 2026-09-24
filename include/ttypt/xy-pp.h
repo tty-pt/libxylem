@@ -1,14 +1,37 @@
 #ifndef XY_PP_H
 #define XY_PP_H
 
+/**
+ * @file xy-pp.h
+ * @brief Preprocessor plumbing for the xy macro API.
+ *
+ * Argument counting, concatenation and expansion helpers used by the
+ * XY_DEF / XY_DECL / XY_IMPL macro families.
+ */
+
+/**
+ * @brief Concatenate @p a with the remaining arguments after expansion.
+ */
 #define CAT(a, ...) PRIMITIVE_CAT(a, __VA_ARGS__)
+/**
+ * @brief Concatenate two token lists without further expansion.
+ */
 #define PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
 
+/**
+ * @brief Count the number of (type, name) argument pairs passed.
+ */
 #define XY_PC(...) \
 			 PP_NARG_(__VA_ARGS__, PAIR_RSEQ_N())
+/**
+ * @brief Count arguments via the PP_ARG_N token ladder.
+ */
 #define PP_NARG_(...) \
 	PP_ARG_N(__VA_ARGS__)
 
+/**
+ * @brief Token ladder mapping the argument count to N.
+ */
 #define PP_ARG_N( \
 		 _1,  _2,  _3,  _4,  _5,  _6,  _7,  _8, \
 			_9, _10, _11, _12, _13, _14, _15, _16, \
@@ -19,6 +42,9 @@
 		_49, _50, _51, _52, _53, _54, _55, _56, \
 		_57, _58, _59, _60, _61, _62, _63, N, ...) N
 
+/**
+ * @brief Reverse sequence of paired counts consumed by PP_ARG_N.
+ */
 #define PAIR_RSEQ_N() \
 	31,31,30,30,29,29,28,28,27,27,26,26,25,25, \
 	24,24,23,23,22,22,21,21,20,20,19,19,18,18, \
@@ -26,6 +52,10 @@
 	10,10, 9, 9, 8, 8, 7, 7, 6, 6, 5, 5, 4, 4, \
 	 3, 3, 2, 2, 1, 1, 0, 0
 
+/**
+ * @brief Expand (type, name) pairs into comma-joined type-name declarations.
+ * @attention Internal plumbing for the XY macro families.
+ */
 #define XY_FA(...) CAT(XY_FA_, \
 		XY_PC(__VA_ARGS__))( __VA_ARGS__)
 
@@ -46,6 +76,10 @@
 #define XY_FA_15(a, b, ...)  a b, XY_FA_14(__VA_ARGS__)
 #define XY_FA_16(a, b, ...)  a b, XY_FA_15(__VA_ARGS__)
 
+/**
+ * @brief Expand (type, name) pairs into semicolon-terminated declarations.
+ * @attention Internal plumbing for the XY macro families.
+ */
 #define XY_PG(...) CAT(XY_PG_, \
 		XY_PC(__VA_ARGS__))( __VA_ARGS__)
 
@@ -66,6 +100,10 @@
 #define XY_PG_15(a, b, ...)  a b; XY_PG_14(__VA_ARGS__)
 #define XY_PG_16(a, b, ...)  a b; XY_PG_15(__VA_ARGS__)
 
+/**
+ * @brief Expand (a, b) pairs to __xy_a->b, comma-joined.
+ * @attention Internal plumbing for the XY macro families.
+ */
 #define XY_NP(...) CAT(XY_NP_, \
 		XY_PC(__VA_ARGS__))( __VA_ARGS__)
 
@@ -86,6 +124,10 @@
 #define XY_NP_15(a, b, ...)  __xy_a->b, XY_NP_14(__VA_ARGS__)
 #define XY_NP_16(a, b, ...)  __xy_a->b, XY_NP_15(__VA_ARGS__)
 
+/**
+ * @brief Expand pairs to their second element (name only), comma-joined.
+ * @attention Internal plumbing for the XY macro families.
+ */
 #define XY_DA(...) CAT(XY_DA_, \
 		XY_PC(__VA_ARGS__))( __VA_ARGS__)
 
@@ -106,7 +148,13 @@
 #define XY_DA_15(a, b, ...)  b, XY_DA_14(__VA_ARGS__)
 #define XY_DA_16(a, b, ...)  b, XY_DA_15(__VA_ARGS__)
 
+/**
+ * @brief Stringize a token without macro expansion.
+ */
 #define STR(x) #x
+/**
+ * @brief Stringize a token after macro expansion.
+ */
 #define XSTR(x) STR(x)
 
 #endif

@@ -1,3 +1,12 @@
+## 1.4.0
+
+- **Renamed `libndx` → `libxylem`**: the `ndx_*` API and headers (`include/ttypt/ndx.h` → `xy.h`, `ndx-mod.h` → `xy-mod.h`, `ndx-pp.h` → `xy-pp.h`, `ndx-watch.h` → `xy-watch.h`; `ndx.pc` → `xylem.pc`). Region/pledge/intercept surface and the `XY_DECL`/`XY_DEF`/`XY_IMPL` module contract are unchanged, only the prefix.
+- **Faster `xy_call` dispatch**: hook-implementation check inlined, fast return-value copy, and a single-listener fast path.
+- **True in-place reload**: `xy_reload` re-inserts a module at its original dispatch position.
+- **Portable `dlopen`**: module loading goes through `qsys_dlopen` (`libqsys`) — POSIX on Unix, `LoadLibraryA` on Windows — trimming platform `#ifdef`s from the loader.
+- **Rust bindings** updated for the rename; audit/compliance cleanups and warning fixes.
+- `libqmap` → `libcorm` rename.
+
 ## [1.1.2] - 2026-04-18
 - **Region system**: modules are now scoped to hierarchical regions. `xy_load()` places modules into the caller's current region; `XY_CALL` dispatches only to modules in the caller's region or its descendants. Region IDs use prefix-encoded paths for O(1) ancestry checks.
 - **`xy_claim(bits)`** (module export): a module declares how many sub-region bits it requests. The host evaluates it via the registered claim handler before running `xy_install()`.
@@ -11,7 +20,7 @@
 - **`xy_my_region()`**: return the region ID assigned to the calling module (diagnostic use).
 - **Per-region module state** (`XY_REGION_STATE` / `XY_REGION_INIT` / `XY_RS`): a module can declare a per-region state struct; the framework allocates one instance per region the module is loaded into and injects it via `xy.region_state` before each hook dispatch.
 - **Hot-path optimisations**: `xy_adapter_t` gains a `hook_id` field resolved lazily on first call, eliminating repeated hash-map lookups; `xy_call` accepts a `caller` parameter and skips the TLS pledge write when no pledges are active; region save/restore in the dispatch loop is skipped when the module's region matches the caller's.
-- **Bugfixes**: guard against `WEAK` macro redefinition; fix `region_is_ancestor` depth check that allowed shallower nodes to falsely match as descendants; fix `__xy_caller_path__` redefinition when a TU includes both `xy.h` and `xy-mod.h`; composite `qmap` key for `mod_hd` prevents collisions when the same `.so` is loaded into multiple regions.
+- **Bugfixes**: guard against `WEAK` macro redefinition; fix `region_is_ancestor` depth check that allowed shallower nodes to falsely match as descendants; fix `__xy_caller_path__` redefinition when a TU includes both `xy.h` and `xy-mod.h`; composite `corm` key for `mod_hd` prevents collisions when the same `.so` is loaded into multiple regions.
 - Added `docs/api.md`. Removed Rust bindings scaffolding. Added comprehensive test suite.
 
 ## [0.2.0] - 2026-02-22
@@ -31,7 +40,7 @@
 - Update pkg-config metadata
 
 ## [0.1.1] - 2025-10-24
-- Update to libqmap 0.5.0
+- Update to libcorm 0.5.0
 
 ## [0.1.0] - 2025-10-19
 - Windows compatibility

@@ -6,5 +6,5 @@ includedir=${prefix}/include
 Name: xylemlib
 Description: Modding and extensibility library
 Version: 0.2.0
-Libs: -L${libdir} -lxylem -lqsys -lqmap
+Libs: -L${libdir} -lxylem -lqsys -lcorm
 Cflags: -I${includedir}
