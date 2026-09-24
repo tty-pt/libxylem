@@ -1,3 +1,6 @@
+#ifndef XY_H
+#define XY_H
+
 /**
  * @file xy.h
  * @brief Modding and extensibility API.
@@ -31,8 +34,6 @@
  * - Use xy_errno() to get last error code
  * - Use xy_strerror(err) to get human-readable message
  */
-#ifndef XY_H
-#define XY_H
 
 /* RECOMMENDATIONS:
  *

@@ -1,6 +1,14 @@
 #ifndef XY_MOD_H
 #define XY_MOD_H
 
+/**
+ * @file xy-mod.h
+ * @brief Module-side implementation glue for the xy module system.
+ *
+ * Included by module sources to get the injected xy context and the
+ * XY_IMPL / XY_CALL expansion machinery.
+ */
+
 #include "xy.h"
 static struct xy_ctx xy;
 
