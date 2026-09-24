@@ -1,3 +1,12 @@
+## 1.4.0
+
+- **Renamed `libndx` → `libxylem`**: the `ndx_*` API and headers (`include/ttypt/ndx.h` → `xy.h`, `ndx-mod.h` → `xy-mod.h`, `ndx-pp.h` → `xy-pp.h`, `ndx-watch.h` → `xy-watch.h`; `ndx.pc` → `xylem.pc`). Region/pledge/intercept surface and the `XY_DECL`/`XY_DEF`/`XY_IMPL` module contract are unchanged, only the prefix.
+- **Faster `xy_call` dispatch**: hook-implementation check inlined, fast return-value copy, and a single-listener fast path.
+- **True in-place reload**: `xy_reload` re-inserts a module at its original dispatch position.
+- **Portable `dlopen`**: module loading goes through `qsys_dlopen` (`libqsys`) — POSIX on Unix, `LoadLibraryA` on Windows — trimming platform `#ifdef`s from the loader.
+- **Rust bindings** updated for the rename; audit/compliance cleanups and warning fixes.
+- `libqmap` → `libcorm` rename.
+
 ## [1.1.2] - 2026-04-18
 - **Region system**: modules are now scoped to hierarchical regions. `xy_load()` places modules into the caller's current region; `XY_CALL` dispatches only to modules in the caller's region or its descendants. Region IDs use prefix-encoded paths for O(1) ancestry checks.
 - **`xy_claim(bits)`** (module export): a module declares how many sub-region bits it requests. The host evaluates it via the registered claim handler before running `xy_install()`.
