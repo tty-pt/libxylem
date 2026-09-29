@@ -10,7 +10,29 @@
 #include <dlfcn.h>	/* dladdr/Dl_info only — address→module introspection,
 			 * distinct from the dlopen/dlsym/dlclose/dlerror quad
 			 * that now goes through libqsys's portable wrappers. */
-#include <link.h>	/* dlinfo/RTLD_DI_LINKMAP — which file a handle is */
+/* <link.h> and dlinfo()/RTLD_DI_LINKMAP exist only on the ELF/BSD linkers.
+ * macOS has no <link.h> and its dlfcn.h declares neither dlinfo() nor
+ * RTLD_DI_LINKMAP; OpenBSD has no <link.h> either.  Both still give us
+ * dladdr(), so module identity falls back to comparing the file the loader
+ * mapped (see module_same_file / module_symbol_is_local).
+ *
+ * The platform list is spelled out instead of testing
+ * #if defined(RTLD_DI_LINKMAP): glibc declares that as an enum member,
+ * which the preprocessor never sees. */
+#if defined(__linux__) || defined(__FreeBSD__) || \
+    defined(__NetBSD__) || defined(__DragonFly__)
+#include <link.h>	/* struct link_map — only where dlinfo() exists */
+#define XY_HAVE_DLINFO 1
+#if defined(__FreeBSD__) && defined(__FreeBSD_version) && \
+    __FreeBSD_version >= 1300000
+/* FreeBSD >= 13 split the fields: l_base is the mapped base address that
+ * dladdr() reports as dli_fbase, l_addr became the load offset.  Older
+ * FreeBSD (and glibc/musl/NetBSD/DragonFly) put the base in l_addr. */
+#define XY_LINKMAP_BASE(lm) ((void *)(lm)->l_base)
+#else
+#define XY_LINKMAP_BASE(lm) ((void *)(lm)->l_addr)
+#endif
+#endif
 #endif
 
 enum opts {
@@ -571,6 +593,24 @@ module_handle_base(void *handle)
 #endif
 }
 
+/* Do two paths name the same file?  The loader normally echoes back the exact
+ * string handed to dlopen, so strcmp covers the common case — including a
+ * reload tmp copy that has already been unlinked.  The stat compare covers the
+ * rest: dyld canonicalises /tmp -> /private/tmp and resolves symlinks, so the
+ * path it reports can differ from ours while the file is the same. */
+int
+module_same_file(const char *a, const char *b)
+{
+	if (!a || !b)
+		return 0;
+	if (strcmp(a, b) == 0)
+		return 1;
+	struct stat sa, sb;
+	if (stat(a, &sa) != 0 || stat(b, &sb) != 0)
+		return 0;
+	return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+
 /*
  * A dlsym(handle, name) hit does not mean this module defines the symbol.
  * On glibc the search continues through the handle's DT_NEEDED
@@ -582,26 +622,47 @@ module_handle_base(void *handle)
  * nd's entry resolved axil_tty_attach/axil_tty_input/axil_tty_active
  * and on_axil_tick through its dependency, duplicating negotiation
  * frames, PTY input and tick delivery.) Confirm the defining object is
- * the handle's own file before claiming it: an exact base-address
- * compare, so symlinks, /lib→/usr/lib and tmp-copy reloads all agree.
+ * the handle's own file before claiming it, with an exact compare so
+ * symlinks, /lib→/usr/lib and tmp-copy reloads all agree.
+ *
+ * How the defining object is identified depends on the platform:
+ *
+ *   - Windows: GetProcAddress is already module-local, the base compare
+ *     is belt and braces.
+ *   - glibc, musl, FreeBSD, NetBSD, DragonFly: dlinfo() hands back the
+ *     handle's link_map, whose load base is compared against the symbol's
+ *     dli_fbase.
+ *   - macOS and OpenBSD: no dlinfo() and no <link.h>, so the object is
+ *     identified by the file dladdr() says the address came from, matched
+ *     against the file this module was dlopen()'d from.
+ *
+ * A failed lookup means "not proven local" (0), never "assume local" —
+ * wrongly claiming locality is what duplicates dispatch, dropping a hook
+ * only means it stays unresolved.
  */
 int
-module_symbol_is_local(void *handle, void *sym)
+module_symbol_is_local(const xy_mod_entry_t *me, void *sym)
 {
-	if (!handle || !sym)
+	if (!me || !me->handle || !sym)
 		return 0;
 #ifdef _WIN32
-	/* GetProcAddress is already module-local; the compare is belt and
-	 * braces for a handle that aliases another mapping. */
-	return module_base_from_symbol(sym) == handle;
-#else
+	return module_base_from_symbol(sym) == me->handle;
+#elif defined(XY_HAVE_DLINFO)
 	struct link_map *lm = NULL;
-	if (dlinfo(handle, RTLD_DI_LINKMAP, &lm) != 0 || !lm)
+	if (dlinfo(me->handle, RTLD_DI_LINKMAP, &lm) != 0 || !lm)
 		return 0;
 	Dl_info di;
 	if (!dladdr(sym, &di) || !di.dli_fbase)
 		return 0;
-	return di.dli_fbase == (void *)lm->l_addr;
+	return di.dli_fbase == XY_LINKMAP_BASE(lm);
+#else
+	Dl_info di;
+	if (!dladdr(sym, &di) || !di.dli_fname)
+		return 0;
+	/* A reload maps a .xylem-XXXXXX.so copy, so the tmp path — not the
+	 * stable one — is the file this handle actually refers to. */
+	const char *own = me->tmp_load_path ? me->tmp_load_path : me->load_path;
+	return module_same_file(di.dli_fname, own);
 #endif
 }
 

@@ -35,6 +35,11 @@ ${TEST_DIR}/test_deps${EXE}: ${TEST_DIR} ${TEST_DIR}/test_deps.c lib/libxylem.${
 	${cc} -o $@ ${TEST_DIR}/test_deps.c ${CFLAGS} ${TEST_CFLAGS} -Itests \
 		${LDFLAGS} -lxylem ${LDLIBS-libxylem} ${TEST_LDFLAGS}
 
+${TEST_DIR}/test_objectpath${EXE}: ${TEST_DIR} ${TEST_DIR}/test_objectpath.c \
+		${TEST_DIR}/mods/mod_basic.${SO} ${TEST_DIR}/mods/mod_multi.${SO} lib/libxylem.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_objectpath.c ${CFLAGS} ${TEST_CFLAGS} \
+		${LDFLAGS} -lxylem ${LDLIBS-libxylem} ${TEST_LDFLAGS}
+
 ${TEST_DIR}/test_auto_init${EXE}: ${TEST_DIR} ${TEST_DIR}/test_auto_init.c lib/libxylem.${SO}
 	${cc} -o $@ ${TEST_DIR}/test_auto_init.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lxylem ${LDLIBS-libxylem} ${TEST_LDFLAGS}
@@ -291,6 +296,7 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_macros${EXE} \
 	${TEST_DIR}/test_main${EXE} \
 	${TEST_DIR}/test_deps${EXE} \
+	${TEST_DIR}/test_objectpath${EXE} \
 	${TEST_DIR}/test_auto_init${EXE} \
 	${TEST_DIR}/test_multi_call${EXE} \
 	${TEST_DIR}/test_get${EXE} \

@@ -93,8 +93,16 @@ void *corm_ptr(const void *value);
 void *module_lookup_symbol_raw(void *handle, const char *symbol);
 int module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t fn_size);
 /* True when sym is defined in handle's own object, not merely visible
- * through its DT_NEEDED dependencies (which dlsym follows on glibc). */
-int module_symbol_is_local(void *handle, void *sym);
+ * through its DT_NEEDED dependencies (which dlsym follows on glibc, dyld
+ * and OpenBSD).  Takes the module entry, not the bare handle: platforms
+ * without dlinfo()/RTLD_DI_LINKMAP (macOS, OpenBSD) identify the object
+ * by the file it was loaded from instead. */
+int module_symbol_is_local(const xy_mod_entry_t *me, void *sym);
+/* True when both paths name the same existing file, by string or by
+ * st_dev/st_ino (the loader may report a canonicalised spelling of the
+ * path we passed to dlopen).  Also the module-identity fallback used on
+ * platforms without dlinfo(); exported for test_objectpath. */
+int module_same_file(const char *a, const char *b);
 void xy_zero_ret(void *retp, const xy_adapter_t *reg);
 static inline void __attribute__((always_inline))
 xy_set_last_ret(const void *retp, size_t ret_size)

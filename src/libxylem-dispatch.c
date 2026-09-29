@@ -54,7 +54,7 @@ fn_cache_resolve(xy_mod_entry_t *me, int hook_id, const char *name)
 	}
 
 	void *cb = module_lookup_symbol_raw(me->handle, name);
-	if (cb && !module_symbol_is_local(me->handle, cb))
+	if (cb && !module_symbol_is_local(me, cb))
 		cb = NULL; /* visible through a DT_NEEDED dependency, not defined here */
 	if (hook_id >= 0)
 		me->fn_cache[hook_id] = cb ? cb : XY_FN_NOT_FOUND;
@@ -89,7 +89,7 @@ fn_cache_prewarm(xy_mod_entry_t *me)
 		if (hook_id < 0 || hook_id >= me->fn_cache_cap) continue;
 		if (me->fn_cache[hook_id]) continue; /* already resolved */
 		void *cb = module_lookup_symbol_raw(me->handle, name);
-		if (cb && !module_symbol_is_local(me->handle, cb))
+		if (cb && !module_symbol_is_local(me, cb))
 			cb = NULL; /* dependency-visible, not defined here */
 		me->fn_cache[hook_id] = cb ? cb : XY_FN_NOT_FOUND;
 		if (cb)
