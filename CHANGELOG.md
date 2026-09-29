@@ -4,6 +4,7 @@
 - **Faster `xy_call` dispatch**: hook-implementation check inlined, fast return-value copy, and a single-listener fast path.
 - **True in-place reload**: `xy_reload` re-inserts a module at its original dispatch position.
 - **Portable `dlopen`**: module loading goes through `qsys_dlopen` (`libqsys`) — POSIX on Unix, `LoadLibraryA` on Windows — trimming platform `#ifdef`s from the loader.
+- **Builds on macOS and OpenBSD**: the module-locality check (`module_symbol_is_local`) used `<link.h>` + `dlinfo(RTLD_DI_LINKMAP)`, which only exist on the ELF/BSD linkers — macOS ships neither and OpenBSD has no `link.h`, so both platforms failed to compile. The check now identifies a loaded object by base address where `dlinfo()` exists and falls back to file identity (`module_same_file`, string or `st_dev`/`st_ino`) elsewhere, so a reload's `.xylem-XXXXXX.so` copy and dyld's path canonicalisation (`/tmp` → `/private/tmp`, resolved symlinks) still compare as the same module. Also fixes the FreeBSD ≥ 13 base address compare, which used the `l_addr` load offset rather than `l_base`.
 - **Rust bindings** updated for the rename; audit/compliance cleanups and warning fixes.
 - `libqmap` → `libcorm` rename.
 
