@@ -10,6 +10,7 @@
 #include <dlfcn.h>	/* dladdr/Dl_info only — address→module introspection,
 			 * distinct from the dlopen/dlsym/dlclose/dlerror quad
 			 * that now goes through libqsys's portable wrappers. */
+#include <link.h>	/* dlinfo/RTLD_DI_LINKMAP — which file a handle is */
 #endif
 
 enum opts {
@@ -567,6 +568,40 @@ module_handle_base(void *handle)
 	void *any_sym = module_lookup_symbol_raw(handle, "xy_install");
 	if (!any_sym) any_sym = module_lookup_symbol_raw(handle, "get_xy_ptr");
 	return module_base_from_symbol(any_sym);
+#endif
+}
+
+/*
+ * A dlsym(handle, name) hit does not mean this module defines the symbol.
+ * On glibc the search continues through the handle's DT_NEEDED
+ * dependencies, so a module that merely links a library exporting a
+ * hook-named symbol would be misdetected as implementing that hook and
+ * given a dispatch slot pointing at the dependency's code — every
+ * adapter-level call then runs the implementation once per dependent
+ * plus once for the real module. (Seen live: nd links -laxil-tty, so
+ * nd's entry resolved axil_tty_attach/axil_tty_input/axil_tty_active
+ * and on_axil_tick through its dependency, duplicating negotiation
+ * frames, PTY input and tick delivery.) Confirm the defining object is
+ * the handle's own file before claiming it: an exact base-address
+ * compare, so symlinks, /lib→/usr/lib and tmp-copy reloads all agree.
+ */
+int
+module_symbol_is_local(void *handle, void *sym)
+{
+	if (!handle || !sym)
+		return 0;
+#ifdef _WIN32
+	/* GetProcAddress is already module-local; the compare is belt and
+	 * braces for a handle that aliases another mapping. */
+	return module_base_from_symbol(sym) == handle;
+#else
+	struct link_map *lm = NULL;
+	if (dlinfo(handle, RTLD_DI_LINKMAP, &lm) != 0 || !lm)
+		return 0;
+	Dl_info di;
+	if (!dladdr(sym, &di) || !di.dli_fbase)
+		return 0;
+	return di.dli_fbase == (void *)lm->l_addr;
 #endif
 }
 

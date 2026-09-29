@@ -92,6 +92,9 @@ void set_current_region(uint64_t id, xy_region_entry_t *entry);
 void *corm_ptr(const void *value);
 void *module_lookup_symbol_raw(void *handle, const char *symbol);
 int module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t fn_size);
+/* True when sym is defined in handle's own object, not merely visible
+ * through its DT_NEEDED dependencies (which dlsym follows on glibc). */
+int module_symbol_is_local(void *handle, void *sym);
 void xy_zero_ret(void *retp, const xy_adapter_t *reg);
 static inline void __attribute__((always_inline))
 xy_set_last_ret(const void *retp, size_t ret_size)
