@@ -1,5 +1,23 @@
 #include "libxylem-internal.h"
 
+/* T1.5: ran stored in TLS; read ret bytes from TLS retp pointer.
+ *
+ * READABLE MID-DISPATCH. xy_call hands every module in a dispatch the SAME
+ * retp, so when module N is entered retp still holds module N-1's return --
+ * exactly the buffer the old sic_last() chain read. xy_last_ran is now the
+ * number of modules that have COMPLETED in the current dispatch, published by
+ * xy_last_publish() after each dispatch_call, so:
+ *
+ *   - the first module of a dispatch sees xy_last_ran == 0 -> NOTFOUND, which
+ *     is right: there is no predecessor to read;
+ *   - every later module sees its predecessor's return, so a listener chain
+ *     composes again;
+ *   - after the loop, xy_last_ran == total, so the post-dispatch read that
+ *     tests/test_main.c relies on is unchanged.
+ *
+ * Before this, xy_last_ran stayed 0 for the whole loop and was assigned the
+ * total only afterwards, so xy.last() from inside a handler ALWAYS returned
+ * XY_ERR_NOTFOUND and the chain was unobservable (NeverDark MODS.md §12.2). */
 int xy_last(void *ret) {
 	int retc = xy_runtime_ensure();
 	if (retc != XY_OK) {
@@ -22,6 +40,28 @@ int xy_last(void *ret) {
 	return XY_OK;
 }
 
+/* xy_last_publish — expose the module that just ran to the next one.
+ *
+ * Called after each dispatch_call in xy_call's loop with `ran` = the number of
+ * modules that have completed INCLUDING this one. Restating the invariant: for
+ * module N, `ran` is N-1 at the moment N is entered, so xy_last() reads module
+ * N-1's return, which is what the old sic_last() gave it.
+ *
+ * It also re-asserts this dispatch's adapter and retp. A handler may itself
+ * call xy_call (any nested hook, e.g. look_at -> on_examine); the nested call
+ * overwrites xy.adapter, xy_last_retp and xy_last_retbuf on the way out, so
+ * without this the NEXT handler in the outer dispatch would read the nested
+ * hook's result as if it were its own predecessor's. That nested-leak was a
+ * second, independent bug: the guard was not merely useless mid-dispatch, it
+ * was wrong there. */
+static inline void __attribute__((always_inline))
+xy_last_publish(unsigned ran, void *retp, xy_adapter_t *reg)
+{
+	xy_last_ran = ran;
+	xy.adapter = reg;
+	xy_last_retp = retp;
+}
+
 /* -------------------------------------------------------------------------
  * xy_call — region-aware dispatch
  * ------------------------------------------------------------------------- */
@@ -30,8 +70,8 @@ int xy_last(void *ret) {
  * fn_cache_resolve — lazy per-module, per-hook dlsym cache.
  *
  * DISPATCH-SAFETY INVARIANT: this helper is called from inside the DFS
- * dispatch loop of xy_call. It MUST NOT read xy_last_adapter.* — that TLS
- * slot is overwritten whenever a module body nested-calls another hook via
+ * dispatch loop of xy_call. It MUST NOT read xy_last_ran/xy_last_retp/xy_last_retbuf
+ * — those TLS slots are overwritten whenever a module body nested-calls another hook via
  * xy_call, and we are mid-iteration of the *outer* call.
  *
  * Caller must supply hook_id and name from a stable source on its stack.
@@ -311,6 +351,7 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 					dispatch_call(retp, slots[0].cb, arg);
 				}
 				ran = 1;
+				xy_last_publish(ran, retp, reg);
 			}
 		} else {
 			for (int mi = 0; mi < n; mi++) {
@@ -333,6 +374,7 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 				if (unlikely(region_changed))
 					set_current_region(region_id, prev_rentry);
 				ran++;
+				xy_last_publish(ran, retp, reg);
 			}
 		}
 	}
