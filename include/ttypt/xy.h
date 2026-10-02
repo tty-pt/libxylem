@@ -100,6 +100,17 @@
 #define XY_ERR_EPERM     -5
 
 /**
+ * @brief Error: Module was built against a different xy_ctx ABI.
+ *
+ * Returned by xy_load() when the module's context object cannot be proven at
+ * least as large as the host's (see @ref XY_CTX_ABI_VER and xy_ctx_abi()).
+ * This is deliberately a *load-time refusal* rather than a best-effort write:
+ * see the ABI note above @ref struct xy_ctx for why the alternative is silent
+ * memory corruption.
+ */
+#define XY_ERR_ABI       -6
+
+/**
  * @brief Adapter for dispatching hook calls to modules.
  *
  * This struct is used internally to route calls to all modules
@@ -416,19 +427,171 @@ typedef int xy_claim_handler_fn_t(const char *module_path,
 typedef int xy_require_claim_t(xy_claim_handler_fn_t *fn, void *ud);
 
 /**
+ * @brief Region identity.
+ *
+ * A region is identified by the pair @p (id, plen) — never by @p id alone.
+ * @p id is an opaque uint64_t prefix value and @p plen is that prefix's
+ * length in bits (0 for the root region).  Two regions may legitimately
+ * share an @p id and differ only in @p plen — e.g. the root @p (0,0) and a
+ * child granted its leftmost bits @p (0,16) — so any API that must name a
+ * region unambiguously takes both halves.
+ *
+ * This struct is packed, and that is load-bearing rather than cosmetic: it
+ * serves as a fixed-width corm key compared bytewise, so any padding would be
+ * uninitialised bytes that differ between the storing and the looking-up call
+ * and would silently make lookups miss.  sizeof must be exactly 9.
+ */
+typedef struct __attribute__((packed)) xy_region_key {
+	uint64_t id;
+	uint8_t  plen;
+} xy_region_key_t;
+
+/**
  * @brief Enumerate immediate child regions of the caller's current region.
  *
- * Calls @p fn(child_id, ud) for each child in allocation order.
- * child_id is an opaque uint64_t region identifier.
+ * Calls @p fn(child_id, plen, ud) for each child in allocation order.
+ * @p child_id is an opaque uint64_t region identifier and @p plen is that
+ * child's prefix length in bits; together they are the child's identity.
  *
  * Return XY_OK from @p fn to continue, any other value to stop.
  * xy_region_each returns the last value returned by @p fn, or XY_OK if
  * there were no children.
  */
-typedef int xy_region_each_fn_t(uint64_t child_id, void *ud);
+typedef int xy_region_each_fn_t(uint64_t child_id, uint8_t plen, void *ud);
 typedef int xy_region_each_t(xy_region_each_fn_t *fn, void *ud);
-typedef int xy_with_region_t(uint64_t region_id, xy_scope_fn_t *fn, void *ud);
+
+/**
+ * @brief Run @p fn with the caller's current region temporarily set to
+ * the region identified by (@p region_id, @p plen).
+ *
+ * Nested hook calls inside @p fn inherit that region.  The previous region is
+ * always restored, including when @p fn fails.
+ *
+ * @return XY_ERR_NOTFOUND if no region with that exact (id, plen) exists —
+ *         an @p region_id that exists at some other width is a different
+ *         region and is likewise not found.
+ */
+typedef int xy_with_region_t(uint64_t region_id, uint8_t plen,
+                             xy_scope_fn_t *fn, void *ud);
+
+/**
+ * @brief Return the id half of the caller's current region identity.
+ *
+ * This is the id only.  It does not name a region uniquely; pair it with
+ * xy_current_region_plen() to obtain a full identity.
+ */
 typedef uint64_t xy_current_region_t(void);
+
+/**
+ * @brief Return the plen half of the caller's current region identity.
+ *
+ * Reads the thread-local region entry directly — no lookup, and no ambiguity,
+ * because the current region is already resolved.  For any region other than
+ * the current one, use xy_region_exists() to test an exact (id, plen).
+ *
+ * @return Prefix length in bits; 0 for the root region.
+ */
+typedef uint8_t xy_current_region_plen_t(void);
+
+/**
+ * @brief Test whether the region identified by (@p region_id, @p plen)
+ * exists and is addressable.
+ *
+ * @return XY_OK if that exact region exists, XY_ERR_NOTFOUND otherwise.
+ *         Both halves are required: an @p region_id that exists at a
+ *         different width is a different region.
+ */
+typedef int xy_region_exists_t(uint64_t region_id, uint8_t plen);
+
+/**
+ * @brief Create the region identified by (@p id, @p plen), or reuse it.
+ *
+ * The engine-facing creation primitive: it names the region outright instead
+ * of waiting for a module to claim bits, so a region can exist before any
+ * module is loaded into it (Phase 3's st_open) and be rebuilt at boot from
+ * persisted state (Phase 2's restore).
+ *
+ * @p id is an opaque prefix value whose prefix lives in the HIGH bits above
+ * @p plen — the same shape region_alloc_slot() produces for a claim-gated
+ * child.  So @p 2<<48 at @p plen 16 is a canonical, fully aligned id; a value
+ * with any bit set below the prefix width is not, and is rejected.  @p id is
+ * never inspected to infer a width: CP-3 established that four regions share
+ * @p id 0, so a "lowest set bit implies the width" shortcut is exactly the bug
+ * this API exists to avoid.  Pass the width.
+ *
+ * The new region is attached to the *nearest existing ancestor* — the region
+ * of the largest width below @p plen that prefix-covers (@p id, @p plen), the
+ * root always qualifying.  No intermediate ancestors are invented, so a
+ * multi-bit jump is legal and cheap: claiming (0,64) straight from the root
+ * creates one region, not four.
+ *
+ * Rejections:
+ * - @p plen > 64 -> XY_ERR_TOOBIG
+ * - (@p id & high-bit-mask(@p plen)) != @p id -> XY_ERR_INVALID (misaligned)
+ * - @p plen <= its nearest covering ancestor's width -> XY_ERR_INVALID
+ *
+ * Note what that last rule does *not* say: a same-id child is legal.  Claiming
+ * (0,16) under the root (0,0) widens the region, so it is accepted — and it has
+ * to be, since (0,0) and (0,16) sharing an id is exactly what CP-3 introduced.
+ * The rejection is about *width*, never about @p id equalling the ancestor's.
+ *
+ * An exact (@p id, @p plen) match is idempotent: it succeeds, becomes the
+ * caller's current region, and — like the creation path — installs @p fn as the
+ * region's claim handler when @p fn is non-NULL.  A later claim therefore
+ * reconfigures an existing region rather than silently ignoring the handler.
+ *
+ * @param fn  Claim handler to install on the region, or NULL for none.
+ * @param ud  User data for @p fn.
+ * @return XY_OK on creation or reuse; negative XY_ERR_* on rejection.
+ *         On success the region is the caller's current region, so a following
+ *         xy_load() lands inside it.
+ */
+typedef int xy_claim_at_t(uint64_t id, uint8_t plen,
+                          xy_claim_handler_fn_t *fn, void *ud);
+
+/**
+ * @brief Find the deepest existing region whose prefix covers a point.
+ *
+ * The engine's "which region is this point in?" primitive: given a prefix
+ * value, return the most specific region that contains it, so a caller walking
+ * the tree coarse-to-fine can tell an exact hit from an ancestor fallback.
+ *
+ * A region (A, plen_A) covers (@p prefix_id, @p plen) when @p plen_A <= @p plen
+ * and masking @p prefix_id to @p plen_A yields @p A.  The root covers every
+ * point, so the only way to miss is a @p plen that no region reaches.
+ *
+ * @param prefix_id   The point to locate.
+ * @param plen        That point's prefix width in bits.
+ * @param region_plen Out-param: the covering region's width.  Set to 0 on every
+ *                    failure path, so it is always defined.  May be NULL.
+ * @return The covering region's id half, or XY_REGION_INVALID if none.  The id
+ *         alone does not name a region — (0,0) and (0,16) share it — so pass
+ *         the returned width to xy_with_region() to dispatch there.
+ */
+typedef uint64_t xy_region_at_t(uint64_t prefix_id, uint8_t plen,
+                                uint8_t *region_plen);
+
+/**
+ * @brief Dispatch to the caller's current region's own modules only.
+ *
+ * The exact-region counterpart of xy_call().  xy_call() reaches the current
+ * region's whole subtree; this reaches only the modules loaded directly into
+ * the current region — no descendant region, and no ancestor.
+ *
+ * It exists so an ancestor walk gives each region one observable turn instead of
+ * re-running every level's entire subtree once per step.  Deny checks and
+ * xy_last() predecessor semantics are identical to xy_call()'s: a listener
+ * still sees its predecessor's return value, and a deny from any ancestor still
+ * refuses the whole dispatch with XY_ERR_EPERM.
+ *
+ * @param retp     Out-param for the last listener's return value.
+ * @param adapter  The hook adapter.
+ * @param args     Hook arguments.
+ * @return XY_OK, XY_ERR_NOTFOUND if no listener in this exact region ran
+ *         (an empty dispatch, which is not the same as a listener returning
+ *         zero — read xy_errno() to tell them apart), or another XY_ERR_*.
+ */
+typedef int xy_call_self_t(void *retp, xy_adapter_t *adapter, void *args);
 
 xy_areg_t   xy_areg;
 xy_call_t   xy_call;
@@ -438,6 +601,11 @@ xy_require_claim_t  xy_require_claim;
 xy_region_each_t    xy_region_each;
 xy_with_region_t    xy_with_region;
 xy_current_region_t xy_current_region;
+xy_current_region_plen_t xy_current_region_plen;
+xy_region_exists_t  xy_region_exists;
+xy_claim_at_t       xy_claim_at;
+xy_region_at_t      xy_region_at;
+xy_call_self_t      xy_call_self;
 
 /**
  * @brief Load or reload a module into the caller's current region.
@@ -514,6 +682,52 @@ xy_strerror_t xy_strerror;
 
 void xy_init(void);
 
+/**
+ * @name Context ABI tripwire
+ *
+ * The host fills a module-local @ref xy_ctx by writing
+ * `sizeof(struct xy_ctx)` bytes into it, using the size *the host* was
+ * compiled with.  If the module was built against a different header its
+ * object may be smaller, and the tail of that write lands in whatever follows
+ * it in the module's BSS.  This is invisible at the source level — a stale
+ * module still loads, still returns XY_OK, and still has working function
+ * pointers for every field both versions share — so the only symptom is
+ * corruption of an unrelated library, some distance away.
+ *
+ * Two mechanisms prevent that, and both must be used:
+ *
+ * 1. @ref XY_CTX_SIZE is a hard `_Static_assert` on this struct.  Adding or
+ *    removing a field fails the build of *everything* that includes this
+ *    header, host and module alike, until the constant is deliberately
+ *    bumped.  That makes a layout change impossible to ship silently.
+ * 2. @ref XY_CTX_ABI_VER is exchanged at load time.  A module must export
+ *    `xy_ctx_abi()` (xy-mod.h emits it automatically); if the descriptor does
+ *    not match the host's exactly, the load is refused with @ref XY_ERR_ABI.
+ *    This catches the case (1) cannot: a module compiled earlier against an
+ *    older header and still sitting on disk.
+ *
+ * Note that (1) alone is not enough, because `external/axil-*` modules build
+ * against the *system-installed* header tree rather than this submodule, so a
+ * site `make` does not rebuild them.
+ * @{
+ */
+
+/** @brief ABI generation of @ref xy_ctx.  Bump on every layout change. */
+#define XY_CTX_ABI_VER   3
+
+/** @brief `sizeof(struct xy_ctx)` as asserted by this header. */
+#define XY_CTX_SIZE      184
+
+/**
+ * @brief The value a module must export from `xy_ctx_abi()`.
+ *
+ * Packs the ABI generation in the high 32 bits and the context size in the low
+ * 32, so one exported function carries the whole contract and the host can
+ * decode it for an actionable error message.
+ */
+#define XY_CTX_ABI_DESC  (((uint64_t)(XY_CTX_ABI_VER) << 32) | (uint32_t)(XY_CTX_SIZE))
+/** @} */
+
 struct xy_ctx {
 	xy_call_t       *call;
 	xy_areg_t       *areg;
@@ -533,6 +747,11 @@ struct xy_ctx {
 	xy_region_each_t     *region_each;
 	xy_with_region_t     *with_region;
 	xy_current_region_t  *current_region;
+	xy_current_region_plen_t *current_region_plen;
+	xy_region_exists_t   *region_exists;
+	xy_claim_at_t        *claim_at;
+	xy_region_at_t       *region_at;
+	xy_call_self_t       *call_self;
 	/* unload / reload */
 	xy_unload_t          *unload;
 	xy_reload_t          *reload;
@@ -540,6 +759,12 @@ struct xy_ctx {
 	 *  hook dispatch.  NULL if the module did not export xy_region_state_size. */
 	void                  *region_state;
 };
+
+/* The tripwire.  A layout change must not be shippable without a deliberate
+ * bump — see @ref XY_CTX_ABI_VER. */
+_Static_assert(sizeof(struct xy_ctx) == XY_CTX_SIZE,
+	"struct xy_ctx layout changed: bump XY_CTX_ABI_VER and XY_CTX_SIZE in "
+	"xy.h, then rebuild every module (stale ones are refused at load)");
 
 /**
  * @brief Register a module's xy context from a .init_array constructor.
@@ -552,5 +777,30 @@ struct xy_ctx {
  * @param ctx  Pointer to the module-local XyCtx static.
  */
 void xy_self_init_ctx(struct xy_ctx *ctx);
+
+/**
+ * @brief Report this module's xy_ctx ABI generation and size.
+ *
+ * A module **must** export this symbol with exactly this signature, returning
+ * @ref XY_CTX_ABI_DESC.  `xy-mod.h` emits it automatically for C modules and
+ * `xy_module!()` does so for Rust modules; a hand-written module that only
+ * exports `get_xy_ptr` must add it by hand.
+ *
+ * The host compares the returned descriptor against its own before writing
+ * anything into the module's context.  A module built against a different
+ * header has an object of a different size, and the host's write would
+ * overrun it — corrupting unrelated data in the module's BSS rather than
+ * failing.  A module that does not export this symbol at all is refused the
+ * same way, because an unversioned module cannot be proven safe.
+ *
+ * Only modules that actually *have* a context need this.  A module that
+ * exports neither `get_xy_ptr` nor a `xy_self_init_ctx` call has nothing for
+ * the host to write into, so there is nothing to overrun and nothing to
+ * declare; bootstrap modules like the site's `core` are in that class and load
+ * unchanged.
+ *
+ * @return @ref XY_CTX_ABI_DESC as compiled into the calling module.
+ */
+uint64_t xy_ctx_abi(void);
 
 #endif

@@ -45,6 +45,20 @@ pub const XY_ERR_INVALID: c_int = -2;
 pub const XY_ERR_TOOBIG: c_int = -3;
 pub const XY_ERR_INIT: c_int = -4;
 pub const XY_ERR_EPERM: c_int = -5;
+/// Module context ABI mismatch — the module must be rebuilt against the
+/// current header. See `XY_CTX_ABI_VER`.
+pub const XY_ERR_ABI: c_int = -6;
+
+/// Context ABI generation. **Must** match `XY_CTX_ABI_VER` in `xy.h`, and
+/// `XY_CTX_SIZE` must equal `size_of::<XyCtx>()`.
+pub const XY_CTX_ABI_VER: u32 = 3;
+pub const XY_CTX_SIZE: usize = 184;
+
+/// What a module must export from `xy_ctx_abi()`. The host compares this
+/// against its own before writing into the module's `XyCtx` and refuses a
+/// mismatch with `XY_ERR_ABI` — see the ABI note in `xy.h`.
+pub const XY_CTX_ABI_DESC: u64 =
+	((XY_CTX_ABI_VER as u64) << 32) | (XY_CTX_SIZE as u64);
 
 pub const XY_REGION_ROOT: u64 = 0;
 pub const XY_REGION_INVALID: u64 = u64::MAX;
@@ -102,10 +116,24 @@ pub type XyDenyFn           = unsafe extern "C" fn(*const c_char, XyDenyType) ->
 pub type XyScopeFn          = unsafe extern "C" fn(*mut c_void) -> c_int;
 pub type XyClaimHandlerFn   = unsafe extern "C" fn(*const c_char, c_uchar, *mut c_uchar, *mut c_void) -> c_int;
 pub type XyRequireClaimFn   = unsafe extern "C" fn(Option<XyClaimHandlerFn>, *mut c_void) -> c_int;
-pub type XyRegionEachCbFn   = unsafe extern "C" fn(u64, *mut c_void) -> c_int;
+/// (child_id, plen, ud) — a region is identified by the PAIR.  `plen` was added
+/// in 1.5.0; without it a callback cannot tell two sibling regions apart when
+/// they share an id.
+pub type XyRegionEachCbFn   = unsafe extern "C" fn(u64, u8, *mut c_void) -> c_int;
 pub type XyRegionEachFn     = unsafe extern "C" fn(Option<XyRegionEachCbFn>, *mut c_void) -> c_int;
-pub type XyWithRegionFn     = unsafe extern "C" fn(u64, Option<XyScopeFn>, *mut c_void) -> c_int;
+/// xy_with_region(region_id, plen, fn, ud)
+pub type XyWithRegionFn     = unsafe extern "C" fn(u64, u8, Option<XyScopeFn>, *mut c_void) -> c_int;
 pub type XyCurrentRegionFn  = unsafe extern "C" fn() -> u64;
+pub type XyCurrentRegionPlenFn = unsafe extern "C" fn() -> u8;
+pub type XyRegionExistsFn   = unsafe extern "C" fn(u64, u8) -> c_int;
+/// xy_claim_at(id, plen, fn, ud) — engine-driven region creation. `fn` is
+/// nullable, so it is an `Option` exactly like [`XyRequireClaimFn`]'s handler.
+pub type XyClaimAtFn        = unsafe extern "C" fn(u64, u8, Option<XyClaimHandlerFn>, *mut c_void) -> c_int;
+/// xy_region_at(prefix_id, plen, region_plen) — deepest covering region.
+/// `region_plen` is a nullable out-param (`*mut c_uchar`), not an `Option`.
+pub type XyRegionAtFn       = unsafe extern "C" fn(u64, u8, *mut c_uchar) -> u64;
+/// xy_call_self(retp, adapter, args) — exact-region dispatch.
+pub type XyCallSelfFn       = unsafe extern "C" fn(*mut c_void, *mut XyAdapterT, *mut c_void) -> c_int;
 
 // ---------------------------------------------------------------------------
 // struct xy_ctx  (injected into each module by the host)
@@ -128,6 +156,11 @@ pub struct XyCtx {
 	pub region_each:    Option<XyRegionEachFn>,
 	pub with_region:    Option<XyWithRegionFn>,
 	pub current_region: Option<XyCurrentRegionFn>,
+	pub current_region_plen: Option<XyCurrentRegionPlenFn>,
+	pub region_exists:  Option<XyRegionExistsFn>,
+	pub claim_at:       Option<XyClaimAtFn>,
+	pub region_at:      Option<XyRegionAtFn>,
+	pub call_self:      Option<XyCallSelfFn>,
 	pub unload:         Option<XyUnloadFn>,
 	pub reload:         Option<XyReloadFn>,
 	pub region_state:   *mut c_void,
@@ -135,6 +168,16 @@ pub struct XyCtx {
 
 unsafe impl Sync for XyCtx {}
 unsafe impl Send for XyCtx {}
+
+/// Rust mirror tripwire, matching the `_Static_assert` on `struct xy_ctx` in
+/// `xy.h`: a `#[repr(C)]` struct that silently changes size is an ABI break for
+/// every cdylib, and the symptom is corruption in an unrelated library rather
+/// than a compile error. Keep in step with `XY_CTX_ABI_VER` / `XY_CTX_SIZE`.
+const _: () = assert!(
+	core::mem::size_of::<XyCtx>() == XY_CTX_SIZE,
+	"XyCtx no longer matches XY_CTX_SIZE: bump XY_CTX_ABI_VER/XY_CTX_SIZE in both \
+	 xylem and xy.h, then rebuild every module (stale ones are refused at load)"
+);
 
 impl XyCtx {
 	/// A zeroed XyCtx suitable for use as a module-level static.
@@ -156,6 +199,11 @@ impl XyCtx {
 			region_each:    None,
 			with_region:    None,
 			current_region: None,
+			current_region_plen: None,
+			region_exists:  None,
+			claim_at:       None,
+			region_at:      None,
+			call_self:      None,
 			unload:         None,
 			reload:         None,
 			region_state:   core::ptr::null_mut(),
@@ -186,6 +234,8 @@ pub enum XyError {
 	TooBig,
 	Init,
 	Eperm,
+	/// Module built against a different `xy_ctx` layout; rebuild it.
+	Abi,
 	Unknown(i32),
 }
 
@@ -197,6 +247,7 @@ impl XyError {
 			XY_ERR_TOOBIG   => XyError::TooBig,
 			XY_ERR_INIT     => XyError::Init,
 			XY_ERR_EPERM    => XyError::Eperm,
+			XY_ERR_ABI      => XyError::Abi,
 			other            => XyError::Unknown(other),
 		}
 	}
@@ -251,19 +302,129 @@ pub unsafe fn region_each(
 }
 
 /// Run a closure in a given region through the caller's injected XY context.
+///
+/// `region_id` alone does not name a region: the root `(0, 0)` and its leftmost
+/// 16-bit child `(0, 16)` share `region_id == 0`, so `plen` is required. Fails
+/// with `XyError::NotFound` unless that exact `(region_id, plen)` pair exists.
 pub unsafe fn with_region(
 	xy: &XyCtx,
 	region_id: u64,
+	plen: u8,
 	f: Option<XyScopeFn>,
 	ud: *mut c_void,
 ) -> Result<(), XyError> {
-	let code = unsafe { xy.with_region.unwrap()(region_id, f, ud) };
+	let code = unsafe { xy.with_region.unwrap()(region_id, plen, f, ud) };
 	if code == XY_OK { Ok(()) } else { Err(XyError::from_code(code)) }
 }
 
 /// Return the current thread-local region ID through the caller's injected XY context.
+///
+/// This is only half an identity — see [`current_region_plen`].
 pub unsafe fn current_region(xy: &XyCtx) -> u64 {
 	unsafe { xy.current_region.unwrap()() }
+}
+
+/// Return the width (prefix length in bits) of the caller's current region.
+///
+/// The second half of the identity returned by [`current_region`]. Read from the
+/// thread-local entry, so it costs no hash lookup. `0` is a real width (the
+/// root), not a sentinel.
+pub unsafe fn current_region_plen(xy: &XyCtx) -> u8 {
+	unsafe { xy.current_region_plen.unwrap()() }
+}
+
+/// Whether the region `(region_id, plen)` exists and is addressable.
+///
+/// `Ok(())` when it does, `Err(XyError::NotFound)` when it does not. Both halves
+/// must be given: four regions can share `region_id == 0`.
+pub unsafe fn region_exists(xy: &XyCtx, region_id: u64, plen: u8) -> Result<(), XyError> {
+	let code = unsafe { xy.region_exists.unwrap()(region_id, plen) };
+	if code == XY_OK { Ok(()) } else { Err(XyError::from_code(code)) }
+}
+
+/// Create the region `(id, plen)` and make it the caller's current region.
+///
+/// This is the *engine-driven* counterpart to [`require_claim`]: no module is
+/// loaded, the engine just carves out a region that later `load` calls and
+/// dispatches can name.
+///
+/// The new region attaches to the **nearest existing ancestor** — the region of
+/// the largest width below `plen` that prefix-covers `(id, plen)`, the root
+/// always qualifying. No intermediate ancestors are invented, so a multi-bit
+/// jump is legal and cheap: claiming `(0, 64)` straight from the root creates
+/// one region, not four.
+///
+/// Rejects with [`XyError::TooBig`] for `plen > 64`, and with
+/// [`XyError::Invalid`] when `id` has bits set below its prefix width
+/// (misaligned — a canonical plen-16 id is `2<<48`, not `0x1234_5678_9abc_d000`)
+/// or when the request is not strictly wider than its nearest covering
+/// ancestor.
+///
+/// An exact `(id, plen)` match is **idempotent**: it succeeds, becomes the
+/// current region, and installs `fn` as that region's claim handler when `fn`
+/// is `Some`. A later claim therefore reconfigures an existing region rather
+/// than silently ignoring the handler.
+pub unsafe fn claim_at(
+	xy: &XyCtx,
+	id: u64,
+	plen: u8,
+	fn_: Option<XyClaimHandlerFn>,
+	ud: *mut c_void,
+) -> Result<(), XyError> {
+	let code = unsafe { xy.claim_at.unwrap()(id, plen, fn_, ud) };
+	if code == XY_OK { Ok(()) } else { Err(XyError::from_code(code)) }
+}
+
+/// Find the deepest existing region whose prefix covers a point.
+///
+/// The "which region is this point in?" primitive: a caller walking the tree
+/// coarse-to-fine needs to tell an exact hit from an ancestor fallback.
+///
+/// `(a, plen_a)` covers `(prefix_id, plen)` when `plen_a <= plen` and masking
+/// `prefix_id` to `plen_a` yields `a`. The root covers every point, so the only
+/// way to miss is a `plen` no region reaches — hence the `Option`.
+///
+/// The **id half alone does not name a region**: `(0, 0)`, `(0, 16)`,
+/// `(0, 32)` and `(0, 48)` all share `id == 0`, so the covering region's width
+/// is returned as well. Feed the pair to [`with_region`] to dispatch there.
+/// Note the width is a property of the *region found*, not of the point asked
+/// about, which is why it comes back separately.
+///
+/// Pass `core::ptr::null_mut()` for `region_plen` to skip it; the C side treats
+/// a null out-param as "don't care" and always defines it when non-null.
+pub unsafe fn region_at(
+	xy: &XyCtx,
+	prefix_id: u64,
+	plen: u8,
+	region_plen: *mut c_uchar,
+) -> Option<u64> {
+	let id = unsafe { xy.region_at.unwrap()(prefix_id, plen, region_plen) };
+	if id == XY_REGION_INVALID { None } else { Some(id) }
+}
+
+/// Dispatch to the caller's current region's own modules only.
+///
+/// The exact-region counterpart of `xy_call`: `call` reaches the current
+/// region's whole subtree, this reaches only the modules loaded *directly*
+/// into the current region — no descendant region, and no ancestor.
+///
+/// It exists so an ancestor walk gives each region one observable turn instead
+/// of re-running every level's entire subtree once per step. Deny checks and
+/// `xy_last` predecessor semantics are identical to `call`'s: a listener still
+/// sees its predecessor's return value, and a deny from any ancestor still
+/// refuses the whole dispatch with `EPERM`.
+///
+/// Returns [`XyError::NotFound`] when no listener in this exact region ran.
+/// That is *not* the same as a listener returning zero — read `xy.err()` to tell
+/// them apart.
+pub unsafe fn call_self(
+	xy: &XyCtx,
+	retp: *mut c_void,
+	adapter: *mut XyAdapterT,
+	args: *mut c_void,
+) -> Result<(), XyError> {
+	let code = unsafe { xy.call_self.unwrap()(retp, adapter, args) };
+	if code == XY_OK { Ok(()) } else { Err(XyError::from_code(code)) }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +452,9 @@ pub mod prelude {
 	pub use crate::{
 		XyCtx, XyDenyType, XyError,
 		XY_OK, XY_ERR_NOTFOUND, XY_REGION_ROOT,
+		XY_ERR_ABI, XY_CTX_ABI_DESC,
 		load, unload, reload, deny, require_claim, region_each, with_region, current_region,
+		current_region_plen, region_exists,
 		XY_RS,
 	};
 	pub use xylem_macros::{

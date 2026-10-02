@@ -5,6 +5,7 @@
  * ("xy.last fix"); see tests/test_xy_last_dispatch.c.
  */
 #include "../../src/papi.h"
+#include "mod_ctx_abi.h"
 
 xy_t xy;
 

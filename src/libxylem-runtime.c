@@ -23,8 +23,12 @@ xy_runtime_bootstrap(void)
 	if (mod_key_type == CM_MISS)
 		mod_key_type = corm_mreg(mod_key_measure);
 
-	if (!region_id_type)
-		region_id_type = corm_reg(sizeof(uint64_t));
+	/* Region tables are keyed by the full (id, plen) identity — a packed
+	 * 9-byte record, not a bare uint64_t id.  Several regions share an id
+	 * (the root and any left-half child are both id 0), so the width must
+	 * be part of the key or they would collide. */
+	if (!region_key_type)
+		region_key_type = corm_reg(sizeof(xy_region_key_t));
 
 	if (!xy_int_type)
 		xy_int_type = corm_reg(sizeof(int));
@@ -36,9 +40,9 @@ xy_runtime_bootstrap(void)
 	if (!path_intern_hd)
 		path_intern_hd = corm_open(NULL, NULL, CM_STR, xy_ptr_type, MOD_MASK, 0);
 	mod_hd           = corm_open(NULL, NULL, mod_key_type, xy_ptr_type, MOD_MASK, 0);
-	mod_by_region_hd = corm_open(NULL, NULL, region_id_type, xy_ptr_type,
+	mod_by_region_hd = corm_open(NULL, NULL, region_key_type, xy_ptr_type,
 	                             MOD_MASK, CM_SORTED | CM_MULTIVALUE);
-	region_hd = corm_open(NULL, NULL, region_id_type, xy_ptr_type, REGION_MASK, 0);
+	region_hd = corm_open(NULL, NULL, region_key_type, xy_ptr_type, REGION_MASK, 0);
 
 	xy.areg             = xy_areg;
 	xy.call             = xy_call;
@@ -48,6 +52,11 @@ xy_runtime_bootstrap(void)
 	xy.deny             = xy_deny;
 	xy.require_claim    = xy_require_claim;
 	xy.region_each      = xy_region_each;
+	xy.current_region_plen = xy_current_region_plen;
+	xy.region_exists    = xy_region_exists;
+	xy.claim_at         = xy_claim_at;
+	xy.region_at        = xy_region_at;
+	xy.call_self        = xy_call_self;
 	xy.with_region      = xy_with_region;
 	xy.current_region   = xy_current_region;
 	xy.unload           = xy_unload;

@@ -481,6 +481,11 @@ pub fn xy_decl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 // ---------------------------------------------------------------------------
 
 /// Emit the per-module `XY: XyCtx` static and `get_xy_ptr` export.
+/// Also emits `xy_ctx_abi`, the context-ABI handshake the host checks before
+/// it writes into `XY`: the host fills `sizeof(XyCtx)` bytes as *it* was
+/// compiled, so a cdylib built against a different `xylem` version has an
+/// object of a different size and that write would overrun it into adjacent
+/// BSS. A mismatched module is refused with `XY_ERR_ABI` instead.
 /// Also emits a `.init_array` constructor that calls `xy_self_init_ctx` so
 /// the host can initialize XY even when `get_xy_ptr` lookup fails (e.g.
 /// due to Rust cdylib symbol-resolution quirks with dlsym).
@@ -497,6 +502,13 @@ pub fn xy_module(_input: TokenStream) -> TokenStream {
         #[no_mangle]
         pub unsafe extern "C" fn get_xy_ptr() -> *mut ::xylem::XyCtx {
             &raw mut XY
+        }
+
+        /// Must equal `XY_CTX_ABI_DESC` as seen by the C header this cdylib
+        /// was built against; the host refuses any mismatch.
+        #[no_mangle]
+        pub extern "C" fn xy_ctx_abi() -> u64 {
+            ::xylem::XY_CTX_ABI_DESC
         }
 
         unsafe extern "C" fn xy_ctx_self_init() {

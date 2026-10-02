@@ -18,6 +18,7 @@
  * See tests/test_xy_last_dispatch.c for the assertions.
  */
 #include "../../src/papi.h"
+#include "mod_ctx_abi.h"
 
 /* Local-only declaration of a hook implemented elsewhere (mod_xylast_inner);
  * mirrors mod_ptr_args_caller.c's use of ptr_lookup. Must NOT be combined

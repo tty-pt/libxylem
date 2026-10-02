@@ -31,12 +31,18 @@ static int permissive_handler(const char *path, uint8_t req,
  * test_region_state_zeroed
  *
  * Load the module and immediately read the counter — must be 0.
+ *
+ * The xy_errno() assertion is what makes this test non-vacuous: a zero return
+ * is also what you get when NO listener ran at all (see test_errors.c), so
+ * asserting only the value would pass whether or not the hook was registered.
+ * XY_OK after the call proves the module's listener really was dispatched to.
  * ------------------------------------------------------------------------- */
 static void test_region_state_zeroed(void) {
 	assert(xy_load(MOD_RS) == XY_OK);
 
 	int v = rs_get(0);
 	assert(v == 0);
+	assert(xy_errno() == XY_OK); /* a listener ran — not an empty dispatch */
 
 	printf("  test_region_state_zeroed: PASS\n");
 }
@@ -64,10 +70,12 @@ static void test_region_state_independent(void) {
 	int v = rs_increment(0);
 	/* Last module returned 1 (its counter went 0→1) */
 	assert(v == 1);
+	assert(xy_errno() == XY_OK); /* listeners ran */
 
 	/* Increment again — both instances run again, each goes to 2 */
 	v = rs_increment(0);
 	assert(v == 2);
+	assert(xy_errno() == XY_OK);
 
 	/* If state were shared, one instance would have reached 4 and the other 0.
 	 * Since both are 2, the counters are independent. */

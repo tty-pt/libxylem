@@ -176,11 +176,23 @@ module_ensure_fn_cache_cap(xy_mod_entry_t *me, int needed)
 	return 0;
 }
 
-/* Look up an xy_region_entry_t by id.  Returns NULL if not found. */
+/*
+ * Look up an xy_region_entry_t by its FULL identity (id, plen).
+ *
+ * The key carries both halves because distinct regions may share an id and
+ * differ only in width — the root is (0,0) while a child granted the
+ * leftmost bits is (0,16).  A lookup by id alone would be ambiguous, so there
+ * is deliberately no such overload: callers that hold only an id are doing a
+ * query, not resolving a region, and must say which width they mean.
+ *
+ * Returns NULL if no region with that exact identity exists.
+ */
 xy_region_entry_t *
-region_lookup(uint64_t id)
+region_lookup(uint64_t id, uint8_t plen)
 {
-	return (xy_region_entry_t *)corm_ptr(corm_get(region_hd, &id));
+	xy_region_key_t k;
+	region_key(&k, id, plen);
+	return (xy_region_entry_t *)corm_ptr(corm_get(region_hd, &k));
 }
 
 const char *
@@ -366,7 +378,7 @@ region_rebuild_subtree_mods(xy_region_entry_t *root)
 void
 region_ensure_root(void)
 {
-	xy_region_entry_t *root = region_lookup(XY_REGION_ROOT);
+	xy_region_entry_t *root = region_lookup(XY_REGION_ROOT, 0);
 	if (!root) {
 		root = calloc(1, sizeof(*root));
 		root->id         = XY_REGION_ROOT;
@@ -376,29 +388,44 @@ region_ensure_root(void)
 		root->owner_path = NULL; /* host owns root */
 		root->dispatch_gen = 1;
 		root->parent     = NULL; /* root has no parent */
-		corm_put(region_hd, &root->id, &root);
+		{
+			xy_region_key_t k;
+			region_key(&k, root->id, root->plen);
+			corm_put(region_hd, &k, &root);
+		}
 	}
-	/* Always sync the thread-local pointer to the current root entry */
-	if (!xy_current_region_entry || xy_current_region_id == XY_REGION_ROOT)
+	/* Sync the thread-local pointer to the root entry.
+	 *
+	 * The test must NOT be `xy_current_region_id == XY_REGION_ROOT`: a child
+	 * granted the leftmost bits also has id 0, so that condition would reset
+	 * the current region to root when entering (0,16).  Compare the width
+	 * instead — only the root region has plen 0. */
+	if (!xy_current_region_entry || region_current_plen() == 0) {
 		xy_current_region_entry = root;
+		xy_current_region_id    = root->id;
+	}
 }
 
 /* -------------------------------------------------------------------------
  * Module key helpers
  *
- * mod_hd is keyed by "path\0<region_hex>" to allow same .so in multiple
- * regions (each gets its own xy_mod_entry_t).
+ * mod_hd is keyed by "path\0<region_hex><plen_hex>" to allow the same .so
+ * in multiple regions (each gets its own xy_mod_entry_t).  The width is part
+ * of the key because two regions may share an id — (0,16) and (0,17) — and
+ * the same .so in both must be two independent module entries.
  * ------------------------------------------------------------------------- */
 
 void
-mod_key(char *buf, size_t buf_len, const char *path, uint64_t region_id)
+mod_key(char *buf, size_t buf_len, const char *path,
+        uint64_t region_id, uint8_t plen)
 {
-	snprintf(buf, buf_len, "%s%c%016llx",
-	         path, '\0', (unsigned long long)region_id);
+	snprintf(buf, buf_len, "%s%c%016llx%02x",
+	         path, '\0', (unsigned long long)region_id, (unsigned)plen);
 }
 
-/* We need a key length that includes the embedded NUL — use fixed 17 suffix */
-#define MOD_KEY_SUFFIX_LEN 17  /* NUL + 16 hex digits */
+/* Key length includes the embedded NUL — fixed 19-byte suffix:
+ * NUL + 16 hex digits (id) + 2 hex digits (plen). */
+#define MOD_KEY_SUFFIX_LEN 19
 
 static size_t
 mod_key_len(const char *path)
@@ -459,11 +486,13 @@ module_load_path(const char *fname)
 #endif
 }
 
-static void module_rekey_region_index(xy_mod_entry_t *me, uint64_t parent_id,
-                                      uint64_t child_id);
+static void module_rekey_region_index(xy_mod_entry_t *me,
+                                      uint64_t parent_id, uint8_t parent_plen,
+                                      uint64_t child_id, uint8_t child_plen);
 static void module_rekey_loaded_entry(xy_mod_entry_t *me, const char *old_key,
-                                      const char *load_path, uint64_t parent_id,
-                                      uint64_t child_id);
+                                      const char *load_path,
+                                      uint64_t parent_id, uint8_t parent_plen,
+                                      uint64_t child_id, uint8_t child_plen);
 
 void
 module_lookup_result_free(xy_lookup_result_t *lookup)
@@ -477,7 +506,7 @@ module_lookup_result_free(xy_lookup_result_t *lookup)
 }
 
 xy_lookup_result_t
-module_lookup_from_fname(const char *fname, uint64_t region_id)
+module_lookup_from_fname(const char *fname, uint64_t region_id, uint8_t plen)
 {
 	xy_lookup_result_t out = {0};
 	out.load_path = module_load_path(fname);
@@ -493,54 +522,65 @@ module_lookup_from_fname(const char *fname, uint64_t region_id)
 		out.err = XY_ERR_INVALID;
 		return out;
 	}
-	mod_key(out.key, key_len, out.load_path, region_id);
+	mod_key(out.key, key_len, out.load_path, region_id, plen);
 	out.entry = corm_ptr(corm_get(mod_hd, out.key));
 	out.err = XY_OK;
 	return out;
 }
 
 void
-module_rekey_for_claim(const char *caller, uint64_t parent_id,
-                       uint64_t child_id)
+module_rekey_for_claim(const char *caller,
+                       uint64_t parent_id, uint8_t parent_plen,
+                       uint64_t child_id, uint8_t child_plen)
 {
-	xy_lookup_result_t lookup = module_lookup_from_fname(caller, parent_id);
+	xy_lookup_result_t lookup = module_lookup_from_fname(caller, parent_id,
+	                                                    parent_plen);
 	if (!lookup.load_path)
 		return;
 
 	if (lookup.entry)
 		module_rekey_loaded_entry(lookup.entry, lookup.key, lookup.load_path,
-		                          parent_id, child_id);
+		                          parent_id, parent_plen,
+		                          child_id, child_plen);
 	module_lookup_result_free(&lookup);
 }
 
 static void
-module_rekey_region_index(xy_mod_entry_t *me, uint64_t parent_id,
-                          uint64_t child_id)
+module_rekey_region_index(xy_mod_entry_t *me,
+                          uint64_t parent_id, uint8_t parent_plen,
+                          uint64_t child_id, uint8_t child_plen)
 {
-	/* mod_by_region_hd is CM_MULTIVALUE; collect all entries for parent_id,
-	 * delete them all, re-insert all except me under parent_id, then insert
-	 * me under child_id. */
+	/* mod_by_region_hd is keyed by region identity and CM_MULTIVALUE;
+	 * collect all entries for the parent identity, delete them all,
+	 * re-insert all except me under the parent, then insert me under the
+	 * child identity.  Keying by (id, plen) matters here: a parent at
+	 * (0,16) and a sibling at (0,17) share an id, so an id-only key would
+	 * drag the sibling's entries along. */
 #define MOD_BY_REGION_MAX 512
 	xy_mod_entry_t *others[MOD_BY_REGION_MAX];
 	int nothers = 0;
-	uint32_t cur = corm_iter(mod_by_region_hd, &parent_id, 0);
-	const void *ck, *cv;
-	while (corm_next(&ck, &cv, cur)) {
+	xy_region_key_t pk, ck;
+	region_key(&pk, parent_id, parent_plen);
+	region_key(&ck, child_id, child_plen);
+	uint32_t cur = corm_iter(mod_by_region_hd, &pk, 0);
+	const void *ckey, *cv;
+	while (corm_next(&ckey, &cv, cur)) {
 		xy_mod_entry_t *e = corm_ptr(cv);
 		if (e && e != me && nothers < MOD_BY_REGION_MAX)
 			others[nothers++] = e;
 	}
-	corm_del_all(mod_by_region_hd, &parent_id);
+	corm_del_all(mod_by_region_hd, &pk);
 	for (int oi = 0; oi < nothers; oi++)
-		corm_put(mod_by_region_hd, &parent_id, &others[oi]);
-	corm_put(mod_by_region_hd, &child_id, &me);
+		corm_put(mod_by_region_hd, &pk, &others[oi]);
+	corm_put(mod_by_region_hd, &ck, &me);
 #undef MOD_BY_REGION_MAX
 }
 
 static void
 module_rekey_loaded_entry(xy_mod_entry_t *me, const char *old_key,
-                          const char *load_path, uint64_t parent_id,
-                          uint64_t child_id)
+                          const char *load_path,
+                          uint64_t parent_id, uint8_t parent_plen,
+                          uint64_t child_id, uint8_t child_plen)
 {
 	if (!me || !old_key || !load_path) {
 		return;
@@ -550,13 +590,14 @@ module_rekey_loaded_entry(xy_mod_entry_t *me, const char *old_key,
 	char *new_key = malloc(new_key_len);
 	if (!new_key)
 		return;
-	mod_key(new_key, new_key_len, load_path, child_id);
-	me->region_id = child_id;
+	mod_key(new_key, new_key_len, load_path, child_id, child_plen);
+	me->region_id   = child_id;
+	me->region_plen = child_plen;
 	corm_put(mod_hd, new_key, &me);
 	corm_del(mod_hd, old_key);
 	memcpy(me->mod_key, new_key, new_key_len);
 	free(new_key);
-	module_rekey_region_index(me, parent_id, child_id);
+	module_rekey_region_index(me, parent_id, parent_plen, child_id, child_plen);
 	if (me->ctx)
 		me->ctx->region_id = child_id;
 }
@@ -856,7 +897,9 @@ mod_load_abort(xy_load_txn_t *tx, int err)
 		}
 	}
 	if (tx->published_entry && tx->mod_entry) {
-		corm_del(mod_by_region_hd, &tx->mod_entry->region_id);
+		xy_region_key_t rk;
+		region_key(&rk, tx->mod_entry->region_id, tx->mod_entry->region_plen);
+		corm_del(mod_by_region_hd, &rk);
 		corm_del(mod_hd, tx->mod_entry->mod_key);
 	}
 	if (tx->mod_entry) {
@@ -984,7 +1027,8 @@ mod_load_open_handle(xy_load_txn_t *tx, char *fname)
 {
 	char *tmp = NULL;
 
-	tx->lookup = module_lookup_from_fname(fname, tx->inherited_region_id);
+	tx->lookup = module_lookup_from_fname(fname, tx->inherited_region_id,
+	                                      tx->inherited_region_plen);
 	if (tx->lookup.err != XY_OK)
 		return tx->lookup.err;
 	if (!tx->lookup.load_path)
@@ -1052,6 +1096,7 @@ mod_load_alloc_entry(xy_load_txn_t *tx, char *fname)
 
 	tx->mod_entry->handle        = tx->handle;
 	tx->mod_entry->region_id     = tx->inherited_region_id;
+	tx->mod_entry->region_plen   = tx->inherited_region_plen;
 	tx->mod_entry->refcount      = 1;
 	tx->mod_entry->parent_entry  = xy_loading_mod;
 	tx->mod_entry->mod_key       = tx->stable_key;
@@ -1066,8 +1111,64 @@ int
 mod_load_publish_entry(xy_load_txn_t *tx)
 {
 	corm_put(mod_hd, tx->stable_key, &tx->mod_entry);
-	corm_put(mod_by_region_hd, &tx->mod_entry->region_id, &tx->mod_entry);
+	{
+		xy_region_key_t rk;
+		region_key(&rk, tx->mod_entry->region_id, tx->mod_entry->region_plen);
+		corm_put(mod_by_region_hd, &rk, &tx->mod_entry);
+	}
 	tx->published_entry = 1;
+	return XY_OK;
+}
+
+/* Refuse to write into a module context we cannot prove is big enough.
+ *
+ * _xy_init() below writes sizeof(struct xy_ctx) bytes — the size the *host*
+ * was compiled with — into a static owned by the module.  A module built
+ * against an older header has a smaller object, and the tail of the write
+ * lands in whatever the linker placed next to it in the module's BSS.  That
+ * is not an error the loader can see: the load succeeds, the function
+ * pointers both versions share all work, and the damage surfaces later in an
+ * unrelated library as a bad pointer.  It has happened once already
+ * (libaxil-tty's static mux_map overwritten with a pointer's low half, then a
+ * SIGSEGV on the first HTTP request), so the check is a hard gate rather than
+ * a warning.
+ *
+ * A module that does not export xy_ctx_abi() at all is refused too: such a
+ * module necessarily predates the symbol, which means it predates this
+ * contract, so there is nothing to check its size against.
+ */
+static int
+mod_load_check_ctx_abi(xy_load_txn_t *tx)
+{
+	typedef uint64_t xy_ctx_abi_fn_t(void);
+	const uint64_t host = XY_CTX_ABI_DESC;
+	xy_ctx_abi_fn_t *abi_fn = NULL;
+	uint64_t mod = 0;
+
+	/* module_lookup_symbol_fn() yields the symbol's *address*, so the
+	 * descriptor has to be produced by calling through it. */
+	if (module_lookup_symbol_fn(tx->handle, "xy_ctx_abi", &abi_fn,
+	                            sizeof(abi_fn)) && abi_fn)
+		mod = abi_fn();
+
+	if (!abi_fn) {
+		WARN("xy_load: refusing %s: it does not export xy_ctx_abi() — it "
+		     "predates the context ABI contract (host wants ABI %u, size %u). "
+		     "Rebuild the module.\n",
+		     tx->stable_fname, (unsigned)(host >> 32), (unsigned)host);
+		XY_SET_ERR(XY_ERR_ABI);
+		return XY_ERR_ABI;
+	}
+	if (mod != host) {
+		WARN("xy_load: refusing %s: context ABI mismatch — module is "
+		     "ABI %u/size %u, host is ABI %u/size %u. Rebuild the module "
+		     "against the current ttypt/xy.h.\n",
+		     tx->stable_fname,
+		     (unsigned)(mod  >> 32), (unsigned)(mod  & 0xffffffffu),
+		     (unsigned)(host >> 32), (unsigned)(host & 0xffffffffu));
+		XY_SET_ERR(XY_ERR_ABI);
+		return XY_ERR_ABI;
+	}
 	return XY_OK;
 }
 
@@ -1076,6 +1177,7 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 {
 	get_xy_func_t get_xy = NULL;
 	xy_t *ctx = NULL;
+	int ret;
 
 	module_lookup_symbol_fn(tx->handle, "get_xy_ptr", &get_xy, sizeof(get_xy));
 #ifdef XY_DEBUG_LOG
@@ -1147,6 +1249,9 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 		}
 	}
 #endif
+	ret = mod_load_check_ctx_abi(tx);
+	if (ret != XY_OK)
+		return ret;
 	_xy_init(ctx, tx->stable_fname, tx->inherited_region_id);
 #ifdef XY_DEBUG_LOG
 	{
@@ -1166,7 +1271,8 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 int
 mod_load_enter_context(xy_load_txn_t *tx)
 {
-	tx->inherited_reg = region_lookup(tx->inherited_region_id);
+	tx->inherited_reg = region_lookup(tx->inherited_region_id,
+	                                  tx->inherited_region_plen);
 	tx->prev_region_id = xy_current_region_id;
 	tx->prev_region_entry = xy_current_region_entry;
 	set_current_region(tx->inherited_region_id, tx->inherited_reg);
@@ -1187,7 +1293,8 @@ mod_load_claim_if_needed(xy_load_txn_t *tx)
 		return XY_OK;
 
 	return _xy_claim_for_load(tx->stable_fname, tx->inherited_region_id,
-	                           *claim_sym, tx->handle);
+	                          tx->inherited_region_plen,
+	                          *claim_sym, tx->handle);
 }
 
 int
@@ -1245,6 +1352,7 @@ const char *xy_strerror(int err) {
 	case XY_ERR_TOOBIG:   return "return type too large";
 	case XY_ERR_INIT:     return "initialization failed";
 	case XY_ERR_EPERM:    return "operation not permitted";
+	case XY_ERR_ABI:      return "module context ABI mismatch (rebuild module)";
 	default:               return "unknown error";
 	}
 }
@@ -1259,7 +1367,7 @@ int xy_require_claim(xy_claim_handler_fn_t *fn, void *ud) {
 		XY_SET_ERR(enter_ret);
 		return enter_ret;
 	}
-	xy_region_entry_t *reg = region_lookup(xy_current_region_id);
+	xy_region_entry_t *reg = region_lookup_current();
 	if (!reg) {
 		XY_SET_ERR(XY_ERR_NOTFOUND);
 		return XY_ERR_NOTFOUND;
@@ -1284,7 +1392,15 @@ int xy_require_claim(xy_claim_handler_fn_t *fn, void *ud) {
 
 /*
  * Find the first free slot of 'bits' width under parent entry.
- * A slot is free if no existing region has the same plen and id value.
+ *
+ * A slot is free if no existing region has that (id, plen) identity.  The
+ * width is part of the collision test, which is what makes the s == 0
+ * iteration usable: it used to lose to the parent itself, because an
+ * id-only lookup of parent->id matched the parent and made the leftmost half
+ * of every region look taken.  Under (id, plen) identity a child at
+ * (parent->id, parent->plen + bits) is a genuinely distinct region, so the
+ * leftmost half is allocated like any other slot.
+ *
  * Returns the child ID (plain 64-bit prefix value), or XY_REGION_INVALID.
  */
 static uint64_t
@@ -1307,8 +1423,8 @@ region_alloc_slot(const xy_region_entry_t *parent, uint8_t bits)
 	do {
 		uint64_t candidate_id = parent->id | (s << slot_shift);
 
-		/* O(1) collision check via the region hash map */
-		if (!region_lookup(candidate_id))
+		/* O(1) collision check via the region hash map, on full identity */
+		if (!region_lookup(candidate_id, cplen))
 			return candidate_id;
 		s++;
 	} while (s != num_slots);
@@ -1327,7 +1443,7 @@ region_alloc_slot(const xy_region_entry_t *parent, uint8_t bits)
  * handle     — dlopen handle so we can update the live xy_t
  * ------------------------------------------------------------------------- */
 int
-_xy_claim_for_load(const char *caller, uint64_t parent_id,
+_xy_claim_for_load(const char *caller, uint64_t parent_id, uint8_t parent_plen,
                     uint8_t bits, void *handle)
 {
 	(void)handle;
@@ -1336,7 +1452,7 @@ _xy_claim_for_load(const char *caller, uint64_t parent_id,
 		return XY_ERR_INVALID;
 	}
 
-	xy_region_entry_t *parent = region_lookup(parent_id);
+	xy_region_entry_t *parent = region_lookup(parent_id, parent_plen);
 	if (!parent) {
 		XY_SET_ERR(XY_ERR_NOTFOUND);
 		return XY_ERR_NOTFOUND;
@@ -1377,7 +1493,11 @@ _xy_claim_for_load(const char *caller, uint64_t parent_id,
 	child->owner_path = caller;
 	child->dispatch_gen = 1;
 	child->parent     = parent;
-	corm_put(region_hd, &child->id, &child);
+	{
+		xy_region_key_t ck;
+		region_key(&ck, child->id, child->plen);
+		corm_put(region_hd, &ck, &child);
+	}
 
 	/* Wire child into parent's children list */
 	child->sibling_next   = (xy_region_entry_t *)parent->children_head;
@@ -1389,7 +1509,8 @@ _xy_claim_for_load(const char *caller, uint64_t parent_id,
 
 	/* Update the mod entry and re-key it under the new region */
 	if (caller) {
-		module_rekey_for_claim(caller, parent_id, child_id);
+		module_rekey_for_claim(caller, parent_id, parent_plen,
+		                       child_id, child->plen);
 	}
 
 	XY_SET_ERR(XY_OK);
@@ -1406,7 +1527,7 @@ int xy_deny(const char *what, xy_deny_type_t type) {
 		XY_SET_ERR(enter_ret);
 		return enter_ret;
 	}
-	xy_region_entry_t *reg = region_lookup(xy_current_region_id);
+	xy_region_entry_t *reg = region_lookup_current();
 	if (!reg) {
 		XY_SET_ERR(XY_ERR_NOTFOUND);
 		return XY_ERR_NOTFOUND;
@@ -1466,8 +1587,7 @@ int xy_region_each(xy_region_each_fn_t *fn, void *ud) {
 		XY_SET_ERR(enter_ret);
 		return enter_ret;
 	}
-	uint64_t parent_id = xy_current_region_id;
-	xy_region_entry_t *parent = region_lookup(parent_id);
+	xy_region_entry_t *parent = region_lookup_current();
 	if (!parent) {
 		XY_SET_ERR(XY_ERR_NOTFOUND);
 		return XY_ERR_NOTFOUND;
@@ -1475,7 +1595,7 @@ int xy_region_each(xy_region_each_fn_t *fn, void *ud) {
 
 	int ret = XY_OK;
 	for (xy_region_entry_t *e = parent->children_head; e; e = e->sibling_next) {
-		ret = fn(e->id, ud);
+		ret = fn(e->id, e->plen, ud);
 		if (ret != XY_OK) break;
 	}
 	XY_SET_ERR(XY_OK);
@@ -1496,7 +1616,7 @@ xy_current_region(void)
 }
 
 int
-xy_with_region(uint64_t region_id, xy_scope_fn_t *fn, void *ud)
+xy_with_region(uint64_t region_id, uint8_t plen, xy_scope_fn_t *fn, void *ud)
 {
 	int enter_ret = xy_runtime_ensure();
 	if (enter_ret != XY_OK) {
@@ -1508,7 +1628,7 @@ xy_with_region(uint64_t region_id, xy_scope_fn_t *fn, void *ud)
 		return XY_ERR_INVALID;
 	}
 
-	xy_region_entry_t *target = region_lookup(region_id);
+	xy_region_entry_t *target = region_lookup(region_id, plen);
 	if (!target) {
 		XY_SET_ERR(XY_ERR_NOTFOUND);
 		return XY_ERR_NOTFOUND;
@@ -1523,6 +1643,222 @@ xy_with_region(uint64_t region_id, xy_scope_fn_t *fn, void *ud)
 	set_current_region(prev_region_id, prev_region_entry);
 	XY_SET_ERR(ret == XY_OK ? XY_OK : ret);
 	return ret;
+}
+
+uint8_t
+xy_current_region_plen(void)
+{
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		XY_SET_ERR(enter_ret);
+		return 0;
+	}
+	/* Straight off the thread-local entry — the current region is already
+	 * resolved, so there is nothing to look up and no ambiguity. */
+	XY_SET_ERR(XY_OK);
+	return region_current_plen();
+}
+
+int
+xy_region_exists(uint64_t region_id, uint8_t plen)
+{
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		XY_SET_ERR(enter_ret);
+		return enter_ret;
+	}
+	/* Both halves are required: an id that exists at another width names a
+	 * different region and must not be reported as found. */
+	if (!region_lookup(region_id, plen)) {
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
+	}
+	XY_SET_ERR(XY_OK);
+	return XY_OK;
+}
+
+/* -------------------------------------------------------------------------
+ * xy_claim_at / xy_region_at — engine-driven region creation and lookup
+ * ------------------------------------------------------------------------- */
+
+/* Depth-first search for the nearest existing ancestor of (id, plen).
+ *
+ * The region of the largest width that prefix-covers the request wins.  The
+ * walk prunes on width: plen increases strictly along every root-to-leaf path,
+ * so a node at plen >= the requested width has no narrower descendant and its
+ * whole subtree can be skipped.  Containment is checked per node rather than
+ * inherited, because a descendant's prefix can match where its parent's does
+ * not — (2<<48,16) sits inside root (0,0) but not inside (0,16), and only the
+ * per-node test tells those apart.
+ *
+ * O(visited regions), and in practice near O(depth) thanks to the prune. */
+static xy_region_entry_t *
+region_find_ancestor_rec(xy_region_entry_t *node, uint64_t id, uint8_t plen,
+                         xy_region_entry_t *best)
+{
+	if (node->plen >= plen)
+		return best;
+
+	if ((id & region_mask(node->plen)) == node->id &&
+	    (!best || node->plen > best->plen))
+		best = node;
+
+	for (xy_region_entry_t *c = node->children_head; c; c = c->sibling_next)
+		best = region_find_ancestor_rec(c, id, plen, best);
+
+	return best;
+}
+
+xy_region_entry_t *
+region_nearest_ancestor(uint64_t id, uint8_t plen)
+{
+	xy_region_entry_t *root = region_lookup(XY_REGION_ROOT, 0);
+	if (!root)
+		return NULL;
+	return region_find_ancestor_rec(root, id, plen, NULL);
+}
+
+int
+xy_claim_at(uint64_t id, uint8_t plen,
+            xy_claim_handler_fn_t *fn, void *ud)
+{
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		XY_SET_ERR(enter_ret);
+		return enter_ret;
+	}
+
+	if (plen > 64) {
+		XY_SET_ERR(XY_ERR_TOOBIG);
+		return XY_ERR_TOOBIG;
+	}
+	/* Misaligned: bits set below the prefix width.  A canonical id has
+	 * exactly its high plen bits set and nothing else — planet 2 is
+	 * 2<<48 at plen 16, while 0x1234_5678_9abc_d000 is not a plen-16 id. */
+	if ((id & region_mask(plen)) != id) {
+		XY_SET_ERR(XY_ERR_INVALID);
+		return XY_ERR_INVALID;
+	}
+
+	/* Idempotent: an exact (id, plen) match succeeds and becomes current.
+	 * Checked before the "no new bits" reasoning below, because the root
+	 * (0,0) is its own best match and must re-claim cleanly. */
+	xy_region_entry_t *existing = region_lookup(id, plen);
+	if (existing) {
+		if (fn) {
+			existing->claim_handler = fn;
+			existing->claim_handler_ud = ud;
+		}
+		set_current_region(id, existing);
+		XY_SET_ERR(XY_OK);
+		return XY_OK;
+	}
+
+	xy_region_entry_t *parent = region_nearest_ancestor(id, plen);
+	if (!parent) {
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
+	}
+
+	/* "No new bits" guard.  Unreachable while region_nearest_ancestor()
+	 * considers only plen_A < plen, and kept anyway: if that search is ever
+	 * relaxed this fails loudly instead of silently creating a duplicate
+	 * identity for corm_put to resolve arbitrarily. */
+	if (plen <= parent->plen) {
+		XY_SET_ERR(XY_ERR_INVALID);
+		return XY_ERR_INVALID;
+	}
+
+	xy_region_entry_t *child = calloc(1, sizeof(*child));
+	if (!child) {
+		XY_SET_ERR(XY_ERR_TOOBIG);
+		return XY_ERR_TOOBIG;
+	}
+	child->id         = id;
+	child->plen       = plen;
+	child->depth      = parent->depth + 1;
+	child->child_bits = (uint8_t)(plen - parent->plen);
+	/* The engine owns this region; no module claimed it. */
+	child->owner_path = NULL;
+	child->dispatch_gen = 1;
+	child->parent     = parent;
+	child->claim_handler     = fn;
+	child->claim_handler_ud  = ud;
+
+	{
+		xy_region_key_t k;
+		region_key(&k, id, plen);
+		corm_put(region_hd, &k, &child);
+	}
+
+	child->sibling_next   = (xy_region_entry_t *)parent->children_head;
+	parent->children_head = child;
+
+	/* Marks every ancestor's subtree_mods_dirty and bumps dispatch_gen up
+	 * the same chain, so this one call covers both of ST.md §4.5(1)'s
+	 * region_mark_subtree_dirty(A) and region_dispatch_gen_bump(A). */
+	region_mark_subtree_dirty(parent);
+
+	set_current_region(id, child);
+
+	XY_SET_ERR(XY_OK);
+	return XY_OK;
+}
+
+/* Deepest existing region whose prefix covers (prefix_id, plen). */
+static xy_region_entry_t *
+region_find_cover_rec(xy_region_entry_t *node, uint64_t id, uint8_t plen,
+                      xy_region_entry_t *best)
+{
+	/* A region wider than the query point cannot contain it. */
+	if (node->plen > plen)
+		return best;
+
+	if ((id & region_mask(node->plen)) == node->id &&
+	    (!best || node->plen > best->plen))
+		best = node;
+
+	for (xy_region_entry_t *c = node->children_head; c; c = c->sibling_next)
+		best = region_find_cover_rec(c, id, plen, best);
+
+	return best;
+}
+
+uint64_t
+xy_region_at(uint64_t prefix_id, uint8_t plen, uint8_t *region_plen)
+{
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		if (region_plen)
+			*region_plen = 0;
+		XY_SET_ERR(enter_ret);
+		return XY_REGION_INVALID;
+	}
+
+	/* Deterministic 0 on every failure path, so a caller that ignores the
+	 * return value reads a defined width rather than stack noise. */
+	if (region_plen)
+		*region_plen = 0;
+
+	if (plen > 64) {
+		XY_SET_ERR(XY_ERR_TOOBIG);
+		return XY_REGION_INVALID;
+	}
+
+	xy_region_entry_t *root = region_lookup(XY_REGION_ROOT, 0);
+	xy_region_entry_t *hit = root
+		? region_find_cover_rec(root, prefix_id, plen, NULL)
+		: NULL;
+	if (!hit) {
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_REGION_INVALID;
+	}
+
+	if (region_plen)
+		*region_plen = hit->plen;
+
+	XY_SET_ERR(XY_OK);
+	return hit->id;
 }
 
 /* -------------------------------------------------------------------------

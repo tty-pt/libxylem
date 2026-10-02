@@ -106,10 +106,16 @@ static void test_reload(void) {
 	int r = xy_reload(MOD_PATH);
 	assert(r == XY_OK);
 
-	/* Counter continues incrementing after reload */
+	/* xy_reload() is unload + load, and the load deliberately re-maps the
+	 * module: src/libxylem.c:copy_to_tmp() copies the .so to a unique
+	 * temporary inode and dlopens that, "to bypass glibc cache", so a
+	 * rebuilt binary really is picked up.  A fresh mapping means fresh
+	 * .data, so call_count restarts -- it does NOT continue from v2.
+	 * Dispatch position preservation is a separate guarantee, covered by
+	 * test_reload_position_preserved() below. */
 	int v3;
 	XY_CALL(&v3, get_counter, 0);
-	assert(v3 == v2 + 1);
+	assert(v3 == 1); /* fresh mapping: first call on the reloaded copy */
 
 	assert(xy_unload(MOD_PATH) == XY_OK);
 	int vz = 0;
@@ -181,8 +187,10 @@ static void test_reload_position_preserved(void) {
  * Cascade unload: unloading a parent also removes its child
  *
  * mod_cascade_parent loads mod_cascade_child during xy_install.
- * Because xy_install runs before the parent is appended to the dispatch
- * list, the order is: child (55) → parent (77).  Parent runs last → 77.
+ * _mod_load() appends the module to the region's dispatch list BEFORE it runs
+ * mod_load_run_install(), so the parent is in the list first and the child it
+ * loads is appended after it: dispatch order is parent (77) → child (55).
+ * The last module to run sets the return value → 55.
  * Unloading the parent must cascade-remove the child too.
  * ------------------------------------------------------------------------- */
 
@@ -191,7 +199,7 @@ static void test_cascade_unload(void) {
 
 	int v;
 	XY_CALL(&v, get_counter, 0);
-	assert(v == 77); /* parent ran last */
+	assert(v == 55); /* child appended after parent → ran last */
 
 	assert(xy_unload(MOD_CASCADE_P) == XY_OK);
 
@@ -285,8 +293,9 @@ static void test_unload_wrong_region(void) {
  * Deep cascade unload: 3-level chain A → B → C
  *
  * Loading A triggers A's xy_install which loads B; B's xy_install loads C.
- * Install runs before append, so dispatch order is C→B→A (A appended last,
- * runs last, returns 11).
+ * _mod_load() appends before it runs install, so each level is in the list
+ * before the level it loads: dispatch order is A (11) → B (22) → C (33).
+ * C runs last, so its return value wins.
  * Unloading A must cascade through B (parent_entry=A) to C (parent_entry=B).
  * All three must be gone afterwards.
  * ------------------------------------------------------------------------- */
@@ -296,7 +305,7 @@ static void test_cascade_deep(void) {
 
 	int v;
 	XY_CALL(&v, get_counter, 0);
-	assert(v == 11); /* A ran last */
+	assert(v == 33); /* C appended deepest → ran last */
 
 	assert(xy_unload(MOD_CASCADE_DEEP_A) == XY_OK);
 

@@ -95,8 +95,32 @@ region. The root region (region 0) reaches every module.
 A module opts into having its own region by calling `xy_claim(bits)` from
 `xy_install()`. The parent region must have a claim handler registered via
 `xy_require_claim`; without one, `xy_claim` always fails. Once claimed, all
-subsequent `xy_load`, `xy_deny`, `xy_intercept`, and `xy_pledge` calls from
-that module operate on the new child region.
+subsequent `xy_load` and `xy_deny` calls from that module operate on the new
+child region.
+
+A region is identified by the **pair** `(id, plen)` — the id is only half the
+key, and is *not* unique across the tree, because a region's left half has
+exactly its parent's numeric id. Every call that names a region therefore takes
+both halves, and `plen` is never inferred from the id. See
+[`docs/api.md`](docs/api.md#region-identity-id-plen-never-id-alone).
+
+The engine can also create regions directly, with `xy_claim_at()`, and dispatch
+to exactly one region with `xy_call_self()`; both are listed under
+[Naming a region](#naming-a-region).
+
+#### Context ABI generation
+
+`XY_CTX_ABI_VER` is **3** and `XY_CTX_SIZE` is **184** (generation 2 was 2 /
+160; the difference is the `claim_at`, `region_at` and `call_self` pointers in
+`struct xy_ctx`). The host calls a module's exported `xy_ctx_abi()` at load time
+and **refuses** the module if the descriptor does not match, naming both
+generations in the diagnostic — so a stale `.so` fails loudly at load rather than
+corrupting memory later.
+
+Bumping the generation therefore requires rebuilding every module, and a
+header-only bump does not always do it: if a module's Makefile rule does not list
+the installed xylem headers as prerequisites, `make` sees only older sources and
+reports the stale binary as up to date.
 
 ## Quick start
 
@@ -256,24 +280,18 @@ if (r != XY_OK)
 
 ### Pledge
 
-> **⚠️ Not yet implemented.** The `xy_ctx` struct reserves a `pledge` slot for
-> ABI compatibility, but the runtime dispatch logic does not enforce pledges
-> yet. This section describes the planned semantics.
+#### ~~`int xy_pledge(const char *hook_name)`~~ — does not exist
 
-#### `int xy_pledge(const char *hook_name)`
+**This section used to describe an unimplemented API and was wrong twice over.**
+There is no `xy_pledge`, no `xy_pledge_t`, and no reserved `pledge` slot in
+`xy_ctx` — all three have zero occurrences in `include/` and `src/`. The
+`xy_ctx` listing in `docs/api.md` did show a `pledge` slot, which is where the
+claim came from; that listing has been corrected too. See `CHANGELOG.md` 1.5.0.
 
-Restrict who may call a hook. The first module to pledge a hook name within
-its region becomes the sole permitted caller of that hook in that region. Any
-other caller attempting to dispatch the hook receives `XY_ERR_EPERM`.
-
-Must be called from `xy_install()`.
-
-A second pledge for the same hook in the same region returns `XY_ERR_EPERM`.
-
-```c
-// In xy_install — only this module may call "get_token" within this region
-xy_pledge("get_token");
-```
+If you want "no descendant of this region may implement/call that hook", that is
+[`xy_deny`](#regions), which *is* implemented: it denies a hook name or module
+path in the caller's region and all its descendants, refusing the dispatch with
+`XY_ERR_EPERM`.
 
 ### Regions
 
@@ -371,69 +389,102 @@ xy_deny("dangerous_hook", XY_DENY_HOOK);
 xy_deny("mods/untrusted", XY_DENY_MODULE);
 ```
 
-#### `int xy_intercept(const char *hook_name, xy_interceptor_fn_t *fn, void *ud)`
+#### ~~`int xy_intercept(const char *hook_name, xy_interceptor_fn_t *fn, void *ud)`~~ — does not exist
 
-> **⚠️ Not yet implemented.** The `xy_ctx` struct reserves an `intercept` slot
-> for ABI compatibility, but the dispatch loop does not call interceptors yet.
-> This section describes the planned semantics.
+**This section used to describe an unimplemented API, and the "reserved
+`intercept` slot" it cited did not exist either.** `xy_intercept`,
+`xy_intercept_t` and `xy_interceptor_fn_t` have zero occurrences in `include/`
+and `src/`. Middleware interception is not implemented and there is no ABI slot
+for it; do not plan against it on the strength of this README. See
+`CHANGELOG.md` 1.5.0.
 
-Register a middleware interceptor for `hook_name` in the caller's current
-region. Interceptors run outermost-first (root region before child regions).
-Each interceptor may inspect or modify arguments and the return value, call
-`next` to continue, or return early to block.
-
-```c
-typedef int xy_interceptor_fn_t(
-    const char   *hook,     // hook name
-    void         *args,     // cast to struct fname_args*
-    void         *ret,      // cast to the hook's return type
-    xy_call_fn_t next,     // call to continue the chain
-    void         *next_ud,  // pass verbatim to next (do not modify)
-    void         *ud        // user data from xy_intercept
-);
-```
-
-```c
-static int logging_interceptor(const char *hook, void *args, void *ret,
-                                xy_call_fn_t next, void *next_ud, void *ud)
-{
-    (void)args; (void)ret; (void)ud;
-    fprintf(stderr, "before %s\n", hook);
-    next(args, ret, next_ud);
-    fprintf(stderr, "after %s\n", hook);
-    return XY_OK;
-}
-
-void xy_install(void)
-{
-    xy_intercept("on_tick", logging_interceptor, NULL);
-}
-```
+The implemented primitive with a related shape is `xy_deny`, which bounds what
+descendants may do (structurally) rather than inspecting calls.
 
 #### `int xy_region_each(xy_region_each_fn_t *fn, void *ud)`
 
 Enumerate immediate child regions of the caller's current region. Calls
-`fn(child_id, ud)` for each child. `child_id` is an opaque `uint64_t` — it is
-provided for diagnostic and logging purposes only.
+`fn(child_id, plen, ud)` for each child.
+
+**`plen` is not optional.** A region's identity is the pair `(id, plen)`, never
+the id alone: the left half of a region has exactly its parent's numeric id, so
+`(0,0)`, `(0,16)`, `(0,17)` and `(0,64)` all have `id == 0`. `plen` is that
+child's prefix length in bits. `child_id` is an opaque `uint64_t` — diagnostic
+and logging use only.
 
 Return `XY_OK` from `fn` to continue, any other value to stop.
 `xy_region_each` returns the last value returned by `fn`, or `XY_OK` if there
 were no children.
 
 ```c
-typedef int xy_region_each_fn_t(uint64_t child_id, void *ud);
+typedef int xy_region_each_fn_t(uint64_t child_id, uint8_t plen, void *ud);
 ```
 
 ```c
-static int print_child(uint64_t id, void *ud)
+static int print_child(uint64_t id, uint8_t plen, void *ud)
 {
     (void)ud;
-    fprintf(stderr, "child region: %016llx\n", (unsigned long long)id);
+    fprintf(stderr, "child region: id=%016llx plen=%u\n",
+            (unsigned long long)id, (unsigned)plen);
     return XY_OK;
 }
 
 xy_region_each(print_child, NULL);
 ```
+
+#### Naming a region
+
+Because an id alone is ambiguous, every call that must *name* a region takes both
+halves, and the accessors come in a pair:
+
+```c
+int       xy_with_region(uint64_t region_id, uint8_t plen,
+                         xy_scope_fn_t *fn, void *ud);
+uint64_t  xy_current_region(void);       // id half only — not a unique name
+uint8_t   xy_current_region_plen(void);  // plen half; always read both
+int       xy_region_exists(uint64_t region_id, uint8_t plen);
+                                         // XY_OK / XY_ERR_NOTFOUND
+```
+
+Those all *name* an existing region. Two more calls go the other way — they
+*create* a region, or *find* the one covering a point, and neither can be
+expressed as a bare accessor:
+
+```c
+int       xy_claim_at(uint64_t id, uint8_t plen,
+                      xy_claim_handler_fn_t *fn, void *ud);
+uint64_t  xy_region_at(uint64_t prefix_id, uint8_t plen,
+                       uint8_t *region_plen);
+int       xy_call_self(void *retp, xy_adapter_t *adapter, void *args);
+```
+
+`xy_claim_at()` is the engine-driven counterpart to `xy_claim()`: the engine
+carves out `(id, plen)` itself, with no module loaded, and it becomes the
+caller's current region so a following `xy_load()` lands inside it. The new
+region attaches to the **nearest existing ancestor**, and no intermediate
+ancestors are invented — claiming `(0,64)` straight from the root creates one
+region, not four. A same-id child is legal (widening is what matters), an exact
+match is idempotent, and a non-NULL `fn` reconfigures an existing region's claim
+handler rather than being ignored.
+
+`xy_region_at()` answers "which region is this point in?" for a caller walking
+the tree coarse-to-fine. It returns the deepest region that actually **covers**
+the point, which is generally not the deepest region that *exists*, and it
+returns the covering region's width as well — necessary because `(0,0)`,
+`(0,16)`, `(0,32)` and `(0,48)` all share `id == 0`.
+
+`xy_call_self()` dispatches to the caller's current region's **own** modules
+only, where `xy_call()` reaches the whole subtree below it. On a three-deep
+chain the same walk visits 3 listeners this way and 7 via `xy_call()`, which is
+the entire reason it exists: it gives each region one observable turn instead of
+re-running every level's subtree once per step. Deny and `xy_last()` semantics
+are unchanged. Note `xy_last()` carries only the **last** runner's return value.
+
+`xy_with_region()` runs `fn` with the thread's current region set to
+`(region_id, plen)`; nested calls inside `fn` inherit it, and it returns
+`XY_ERR_NOTFOUND` if that exact pair does not exist. There is deliberately no
+`xy_region_plen(uint64_t id)` getter — a lookup by id alone would be a query, not
+a lookup, and a `uint8_t` return could not tell "root" from "not found".
 
 #### `xy_my_region()`
 
@@ -442,9 +493,16 @@ Available in module context only (requires `<ttypt/xy-mod.h>`). Intended for
 diagnostic use.
 
 ```c
-fprintf(stderr, "my region: %016llx\n",
-        (unsigned long long)xy_my_region());
+fprintf(stderr, "my region: id=%016llx plen=%u\n",
+        (unsigned long long)xy_my_region(),
+        (unsigned)xy_current_region_plen());
 ```
+
+**This returns only the id half, which is not a unique name for a region.** It is
+the *assigned* id captured at load time, not necessarily the current region's
+id either. For the two halves of the region you are actually in, use
+`xy_current_region()` together with `xy_current_region_plen()`. Do not use
+`xy_my_region()` as a map key or an identity comparison.
 
 ## Region walkthrough
 
@@ -480,16 +538,6 @@ void xy_install(void) {}
 #include "game_hooks.h"
 
 /* Interceptor: halves dt before passing it on */
-static int halving_interceptor(const char *hook, void *args, void *ret,
-                                xy_call_fn_t next, void *next_ud, void *ud)
-{
-    (void)hook; (void)ret; (void)ud;
-    struct on_tick_args *a = args;
-    a->dt /= 2;
-    next(args, ret, next_ud);
-    return XY_OK;
-}
-
 /* Claim handler: approve up to 4 bits */
 static int claim_handler(const char *path, uint8_t req,
                           uint8_t *granted, void *ud)
@@ -507,9 +555,8 @@ void xy_install(void)
     /* Register handler so child modules may claim */
     xy_require_claim(claim_handler, NULL);
 
-    /* Already in our own region — host claimed it for us.
-     * Now we can install interceptor and load worker. */
-    xy_intercept("on_tick", halving_interceptor, NULL);
+    /* Already in our own region — host claimed it for us, so
+     * xy_current_region_plen() reports our own width here. */
     xy_load("mods/worker");
 }
 ```

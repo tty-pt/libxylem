@@ -3,6 +3,7 @@
 
 #include "../include/ttypt/xy.h"
 #include <stdint.h>
+#include <stddef.h>	/* offsetof — the xy_t/xy_ctx mirror asserts below */
 
 /* Forward declaration — full definition follows below */
 typedef struct xy_t_s xy_t;
@@ -32,15 +33,23 @@ typedef struct xy_deny_entry {
 /*
  * Internal region descriptor.
  *
- * Region IDs are plain opaque uint64_t prefix values — all 64 bits are
- * available as address space.  The prefix length (plen) is stored here in
- * the entry, not packed into the ID.
+ * A region's identity is the PAIR (id, plen) — never the id alone.  Both
+ * halves live here, and both are used as the key of the region hash table,
+ * because distinct regions may share an id and differ only in width: the root
+ * is (0,0) while a child granted the leftmost 16 bits is (0,16).  There is no
+ * plen-in-id trick to recover the width from the id, so plen must never be
+ * inferred from an id — pass it alongside.
  *
- * Ancestry check: mask child_id to ancestor->plen significant bits and
- * compare against ancestor->id.  O(1), no child lookup required.
+ * id is an opaque uint64_t prefix value; all 64 bits are address space.
  *
  * The root region has id=XY_REGION_ROOT (0) and plen=0; it is an ancestor
- * of everything.
+ * of everything.  Its plen of 0 is a real, distinct width — not "unset".
+ *
+ * Ancestry check: follow the parent pointers from the entry to root
+ * (see region_ancestor_chain in libxylem.c).  O(depth), no hash lookup.
+ * Masking an id to a candidate ancestor's plen is NOT sufficient: several
+ * ancestors can share an id and differ only in plen, so an id-only mask
+ * cannot tell them apart.
  *
  * depth: number of edges from root to this node (incremented by 1 per claim,
  * regardless of bit width).
@@ -103,7 +112,10 @@ typedef struct xy_region_entry {
 
 /*
  * Per-module metadata stored in mod_hd.
- * Keyed by "path\0<region_hex>" to allow same .so in multiple regions.
+ * Keyed by "path\0<region_hex><plen_hex>" so the same .so can be loaded into
+ * several regions, including two that share an id but differ in plen
+ * (e.g. (0,16) and (0,17)) — those are distinct modules with independent
+ * per-region state.
  *
  * Field order is tuned so the hot dispatch cluster (ctx, region_next,
  * fn_cache, fn_cache_cap, region_state, handle, region_entry) fits in the
@@ -131,6 +143,7 @@ typedef struct xy_mod_entry {
 
     /* ---- COLD: load / unload / bookkeeping ---- */
     uint64_t region_id;
+    uint8_t  region_plen;
     struct xy_mod_entry *region_prev;
     /* Reference count: incremented on each xy_load for the same (path, region);
      * xy_unload only actually unloads when refcount reaches zero. */
@@ -140,7 +153,8 @@ typedef struct xy_mod_entry {
     struct xy_mod_entry *parent_entry;
     uint64_t *hook_impl_bits;
     int       hook_impl_words;
-    /* Owned copy of the composite hash key ("path\0<region_hex>") for removal */
+    /* Owned copy of the composite hash key ("path\0<region_hex><plen_hex>")
+     * for removal */
     char *mod_key;
     char *tmp_load_path;
 } xy_mod_entry_t;
@@ -169,12 +183,29 @@ typedef struct xy_t_s {
 	xy_region_each_t        *region_each;
 	xy_with_region_t        *with_region;
 	xy_current_region_t     *current_region;
+	xy_current_region_plen_t *current_region_plen;
+	xy_region_exists_t       *region_exists;
+	xy_claim_at_t            *claim_at;
+	xy_region_at_t           *region_at;
+	xy_call_self_t           *call_self;
 	/* unload / reload */
 	xy_unload_t             *unload;
 	xy_reload_t             *reload;
 	/* per-region module state — set by framework before each dispatch */
 	void                     *region_state;
 } xy_t;
+
+/* xy_t is the host-side mirror of the module-side struct xy_ctx, and _xy_init()
+ * writes one as the other.  A field added to one and not the other is a silent
+ * 8-byte skew of every field after it, so pin them here where it is free. */
+_Static_assert(sizeof(xy_t) == sizeof(struct xy_ctx),
+	"xy_t (papi.h) and struct xy_ctx (xy.h) have diverged — mirror the "
+	"missing/extra field(s) in the same position");
+_Static_assert(offsetof(xy_t, region_state) == offsetof(struct xy_ctx, region_state),
+	"xy_t and struct xy_ctx agree in size but not in field order");
+_Static_assert(offsetof(xy_t, current_region_plen)
+	== offsetof(struct xy_ctx, current_region_plen),
+	"xy_t and struct xy_ctx agree in size but not in field order");
 
 extern xy_t xy;
 

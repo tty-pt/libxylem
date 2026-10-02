@@ -48,7 +48,7 @@ typedef struct xy_runtime_s {
 	uint32_t        xy_ptr_type;
 	uint32_t        xy_mod_entry_type;
 	uint32_t        xy_region_entry_type;
-	uint32_t        region_id_type;
+	uint32_t        region_key_type;
 	uint32_t        xy_int_type;
 	uint32_t        mod_key_type_id;
 	int             xy_inited;
@@ -69,7 +69,7 @@ extern xy_runtime_t xy_rt;
 #define xy_ptr_type          (xy_rt.xy_ptr_type)
 #define xy_mod_entry_type    (xy_rt.xy_mod_entry_type)
 #define xy_region_entry_type (xy_rt.xy_region_entry_type)
-#define region_id_type        (xy_rt.region_id_type)
+#define region_key_type      (xy_rt.region_key_type)
 #define xy_int_type          (xy_rt.xy_int_type)
 #define mod_key_type          (xy_rt.mod_key_type_id)
 #define xy_inited            (xy_rt.xy_inited)
@@ -133,7 +133,73 @@ module_has_hook_implemented(const xy_mod_entry_t *me, int hook_id)
 }
 void module_mark_hook_implemented(xy_mod_entry_t *me, int hook_id);
 int module_ensure_fn_cache_cap(xy_mod_entry_t *me, int needed);
-xy_region_entry_t *region_lookup(uint64_t id);
+/* ---- Region identity: (id, plen), never id alone ---- */
+
+/* Build the corm key for a region identity.  Distinct regions may share an
+ * id and differ only in plen (root (0,0) vs a left-half child (0,16)), so
+ * plen is part of the key and is never inferred from an id. */
+_Static_assert(sizeof(xy_region_key_t) == 9,
+	"xy_region_key_t must be exactly 9 packed bytes: it is a bytewise-compared "
+	"corm key, so padding bytes would differ between store and lookup and "
+	"silently turn every region lookup into a miss");
+static inline void
+region_key(xy_region_key_t *k, uint64_t id, uint8_t plen)
+{
+	k->id = id;
+	k->plen = plen;
+}
+
+/* Look up a region by full identity.  Returns NULL if no region with that
+ * exact (id, plen) exists — an id that exists at another width is a
+ * different region and is likewise not found. */
+xy_region_entry_t *region_lookup(uint64_t id, uint8_t plen);
+
+/* Containment mask for a prefix of @p plen bits.
+ *
+ * A region id carries its prefix in the HIGH bits above plen: region_alloc_slot()
+ * builds a child as `parent->id | (s << (64 - cplen))`, so the slot index lands
+ * above the parent's width and the low plen bits stay zero.  Containment must
+ * therefore mask the HIGH plen bits, and this is not a stylistic choice —
+ * masking the low bits agrees for the root (whose mask is 0) and then silently
+ * diverges: it reports region_alloc_slot's siblings as nested, i.e.
+ * (1<<48,16) "inside" (0,16), because both have zero low bits.  Two siblings
+ * must never be parent and child.
+ *
+ * plen 0 masks to 0, which is what makes the root a prefix of everything and
+ * gives `(id & region_mask(0)) == root->id` unconditionally. */
+static inline uint64_t
+region_mask(uint8_t plen)
+{
+	if (plen == 0)
+		return 0;
+	if (plen >= 64)
+		return ~(uint64_t)0;
+	return ~(uint64_t)0 << (64 - plen);
+}
+
+/* Nearest existing ancestor of (id, plen): the region of largest plen_A < plen
+ * with (id & region_mask(plen_A)) == A->id.  The root always qualifies.  NULL
+ * only when the root is absent, which xy_runtime_ensure() rules out. */
+xy_region_entry_t *region_nearest_ancestor(uint64_t id, uint8_t plen);
+
+/* The caller's current region entry from the thread-local, with no hash
+ * lookup.  NULL before the first region_ensure_root(); use
+ * region_lookup_current() where the root must already exist. */
+static inline xy_region_entry_t *
+region_lookup_current(void)
+{
+	return xy_current_region_entry;
+}
+
+/* plen half of the caller's current region identity; 0 for the root and for
+ * the pre-init state, which is correct for both (root's plen really is 0). */
+static inline uint8_t
+region_current_plen(void)
+{
+	xy_region_entry_t *e = xy_current_region_entry;
+	return e ? e->plen : 0;
+}
+
 const char *module_path_intern(char *path);
 void path_intern_free_all(void);
 int region_ancestor_chain(xy_region_entry_t *start,
@@ -144,7 +210,8 @@ void region_dispatch_gen_bump(xy_region_entry_t *entry);
 void region_mark_subtree_dirty(xy_region_entry_t *entry);
 int region_rebuild_subtree_mods(xy_region_entry_t *root);
 void region_ensure_root(void);
-void mod_key(char *buf, size_t buf_len, const char *path, uint64_t region_id);
+void mod_key(char *buf, size_t buf_len, const char *path,
+             uint64_t region_id, uint8_t plen);
 size_t mod_key_measure(const void *data);
 
 typedef struct {
@@ -155,8 +222,11 @@ typedef struct {
 } xy_lookup_result_t;
 
 void module_lookup_result_free(xy_lookup_result_t *lookup);
-xy_lookup_result_t module_lookup_from_fname(const char *fname, uint64_t region_id);
-void module_rekey_for_claim(const char *caller, uint64_t parent_id, uint64_t child_id);
+xy_lookup_result_t module_lookup_from_fname(const char *fname, uint64_t region_id,
+                                           uint8_t plen);
+void module_rekey_for_claim(const char *caller,
+                            uint64_t parent_id, uint8_t parent_plen,
+                            uint64_t child_id, uint8_t child_plen);
 void module_remove_denies(xy_region_entry_t *re, const char *path);
 int module_is_denied(xy_region_entry_t *re, const char *path);
 void module_region_detach(xy_mod_entry_t *entry);
@@ -176,6 +246,7 @@ typedef struct {
 	xy_mod_entry_t    *mod_entry;
 	xy_region_entry_t *inherited_reg;
 	uint64_t            inherited_region_id;
+	uint8_t             inherited_region_plen;
 	uint64_t            prev_region_id;
 	xy_region_entry_t *prev_region_entry;
 	int                 published_entry;
@@ -195,10 +266,13 @@ int mod_load_run_install(xy_load_txn_t *tx);
 void module_remove_path_owned_entries(xy_region_entry_t *re, const char *path,
                                       void *handle);
 
-int _mod_unload(char *fname, uint64_t region_id);
+int _mod_unload(char *fname, uint64_t region_id, uint8_t plen);
 int _mod_run(void *sl, const char *symbol);
-int _xy_claim_for_load(const char *caller, uint64_t parent_id,
+int _xy_claim_for_load(const char *caller, uint64_t parent_id, uint8_t parent_plen,
                         uint8_t bits, void *sl);
+/* xy_ctx carries no plen data field: a module that needs its own region's
+ * width calls xy_current_region_plen(), which dispatch has already made
+ * correct for the module being called. */
 void _xy_init(void *ptr, const char *fname, uint64_t region_id);
 int fn_cache_prewarm(xy_mod_entry_t *me);
 int xy_runtime_ensure(void);

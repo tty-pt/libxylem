@@ -13,6 +13,7 @@
 #include "ptr_args.h"
 #include "../../src/papi.h"
 #include <string.h>
+#include "mod_ctx_abi.h"
 
 xy_t xy;
 
