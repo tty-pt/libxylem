@@ -52,6 +52,29 @@ ${TEST_DIR}/test_get${EXE}: ${TEST_DIR} ${TEST_DIR}/test_get.c lib/libxylem.${SO
 	${cc} -o $@ ${TEST_DIR}/test_get.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lxylem ${LDLIBS-libxylem} ${TEST_LDFLAGS}
 
+${TEST_DIR}/test_xy_last_dispatch${EXE}: ${TEST_DIR} ${TEST_DIR}/test_xy_last_dispatch.c \
+		${TEST_DIR}/mods/mod_xylast_inner.${SO} ${TEST_DIR}/mods/mod_xylast_first.${SO} \
+		${TEST_DIR}/mods/mod_xylast_second.${SO} ${TEST_DIR}/mods/mod_xylast_third.${SO} \
+		lib/libxylem.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_xy_last_dispatch.c ${CFLAGS} ${TEST_CFLAGS} \
+		${LDFLAGS} -lxylem ${LDLIBS-libxylem} ${TEST_LDFLAGS}
+
+${TEST_DIR}/mods/mod_xylast_inner.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_xylast_inner.c lib/libxylem.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_xylast_inner.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lxylem ${LDLIBS-libxylem}
+
+${TEST_DIR}/mods/mod_xylast_first.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_xylast_first.c lib/libxylem.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_xylast_first.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lxylem ${LDLIBS-libxylem}
+
+${TEST_DIR}/mods/mod_xylast_second.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_xylast_second.c lib/libxylem.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_xylast_second.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lxylem ${LDLIBS-libxylem}
+
+${TEST_DIR}/mods/mod_xylast_third.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_xylast_third.c lib/libxylem.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_xylast_third.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lxylem ${LDLIBS-libxylem}
+
 ${TEST_DIR}/test_mod.${SO}: ${TEST_DIR} ${TEST_DIR}/test_mod.c lib/libxylem.${SO}
 	${cc} -o $@ ${TEST_DIR}/test_mod.c ${CFLAGS} ${TEST_CFLAGS} \
 		-fPIC -shared ${LDFLAGS} -lxylem ${LDLIBS-libxylem}
@@ -287,6 +310,10 @@ TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_region_state.${SO} \
 	${TEST_DIR}/mods/mod_ptr_args.${SO} \
 	${TEST_DIR}/mods/mod_ptr_args_caller.${SO} \
+	${TEST_DIR}/mods/mod_xylast_inner.${SO} \
+	${TEST_DIR}/mods/mod_xylast_first.${SO} \
+	${TEST_DIR}/mods/mod_xylast_second.${SO} \
+	${TEST_DIR}/mods/mod_xylast_third.${SO} \
 	${TEST_DIR}/mods/mod_rust_basic.${SO} \
 	${TEST_DIR}/mods/mod_rust_caller.${SO} \
 	${TEST_DIR}/mods/mod_rust_definer.${SO}
@@ -306,6 +333,7 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_unload${EXE} \
 	${TEST_DIR}/test_region_state${EXE} \
 	${TEST_DIR}/test_ptr_args${EXE} \
+	${TEST_DIR}/test_xy_last_dispatch${EXE} \
 	${TEST_DIR}/test_rust${EXE}
 
 BENCH_BIN := ${TEST_DIR}/bench_dispatch${EXE}

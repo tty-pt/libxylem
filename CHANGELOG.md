@@ -1,3 +1,7 @@
+## 1.4.2
+
+- **Fix `xy.last()` inside dispatch handlers**: corrected mid-dispatch state tracking so `xy.last()` returns the predecessor module's result during a handler chain (restoring the expected composition semantics). Also publishes dispatch state via `xy_last_publish` after each call to prevent nested dispatches from leaking results into the outer chain.
+
 ## 1.4.0
 
 - **Renamed `libndx` → `libxylem`**: the `ndx_*` API and headers (`include/ttypt/ndx.h` → `xy.h`, `ndx-mod.h` → `xy-mod.h`, `ndx-pp.h` → `xy-pp.h`, `ndx-watch.h` → `xy-watch.h`; `ndx.pc` → `xylem.pc`). Region/pledge/intercept surface and the `XY_DECL`/`XY_DEF`/`XY_IMPL` module contract are unchanged, only the prefix.
