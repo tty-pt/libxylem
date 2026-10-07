@@ -433,6 +433,9 @@ mod_key_len(const char *path)
 	return strlen(path) + MOD_KEY_SUFFIX_LEN;
 }
 
+static char *module_search_path_list(const char *list, const char *leaf,
+                                     size_t leaflen);
+
 /*
  * Resolve the actual shared-library path used for identity and dlopen.
  * We keep module_path in xy_t as the caller's original fname, but module
@@ -494,47 +497,80 @@ module_load_path(const char *fname)
 	 * only exists under LD_LIBRARY_PATH (the normal case for external
 	 * libraries) would otherwise stay unresolved here while dlopen()
 	 * finds it fine, leaving identity as a bare name no dladdr()
-	 * spelling can match. Search exactly the directories dlopen()
-	 * searches, in order. */
+	 * spelling can match. Search the same directories dlopen()
+	 * searches, in order: the environment first, then the compiled-in
+	 * system defaults (a daemonized server commonly runs without
+	 * LD_LIBRARY_PATH at all -- observed live: dlopen resolved via the
+	 * defaults while getenv found nothing, so env-only search still
+	 * dropped every hook). DT_RPATH/RUNPATH entries are deliberately
+	 * not parsed here; env plus defaults covers real deployments. */
 	if (!strchr(buf, '/')) {
 		static const char *const ld_vars[] = {
 			"LD_LIBRARY_PATH",
 			"DYLD_LIBRARY_PATH",
+		};
+		/* Empty entries mean CWD; realpath() above already covered it. */
+		static const char *const ld_defaults[] = {
+			"/lib",
+			"/usr/lib",
+			"/usr/local/lib",
 		};
 		for (size_t v = 0;
 		     v < sizeof(ld_vars) / sizeof(ld_vars[0]); v++) {
 			const char *ld = getenv(ld_vars[v]);
 			if (!ld || !*ld)
 				continue;
-			const char *p = ld;
-			while (*p) {
-				const char *end = strchr(p, ':');
-				size_t dlen = end ? (size_t)(end - p)
-				                  : strlen(p);
-				/* Empty entries mean CWD; realpath() above
-				 * already covered it. */
-				if (dlen > 0) {
-					size_t clen = dlen + 1 + flen + elen + 1;
-					char *cand = malloc(clen);
-					if (!cand)
-						break;
-					memcpy(cand, p, dlen);
-					cand[dlen] = '/';
-					memcpy(cand + dlen + 1, buf,
-					       flen + elen + 1);
-					resolved = realpath(cand, NULL);
-					free(cand);
-					if (resolved) {
-						free(buf);
-						return resolved;
-					}
-				}
-				p = end ? end + 1 : p + dlen;
+			resolved = module_search_path_list(
+			        ld, buf, flen + elen + 1);
+			if (resolved) {
+				free(buf);
+				return resolved;
+			}
+		}
+		for (size_t d = 0;
+		     d < sizeof(ld_defaults) / sizeof(ld_defaults[0]); d++) {
+			resolved = module_search_path_list(
+			        ld_defaults[d], buf, flen + elen + 1);
+			if (resolved) {
+				free(buf);
+				return resolved;
 			}
 		}
 	}
 	return buf;
 #endif
+}
+
+/* Search one colon-separated directory list for `leaf` (already suffixed),
+ * returning the canonical path of the first hit, or NULL. Shared by the
+ * environment and the compiled-in defaults so both spellings resolve
+ * identically. */
+static char *
+module_search_path_list(const char *list, const char *leaf, size_t leaflen)
+{
+	const char *p = list;
+
+	while (*p) {
+		const char *end = strchr(p, ':');
+		size_t dlen = end ? (size_t)(end - p) : strlen(p);
+		char *resolved = NULL;
+
+		if (dlen > 0) {
+			size_t clen = dlen + 1 + leaflen;
+			char *cand = malloc(clen);
+			if (!cand)
+				return NULL;
+			memcpy(cand, p, dlen);
+			cand[dlen] = '/';
+			memcpy(cand + dlen + 1, leaf, leaflen);
+			resolved = realpath(cand, NULL);
+			free(cand);
+			if (resolved)
+				return resolved;
+		}
+		p = end ? end + 1 : p + dlen;
+	}
+	return NULL;
 }
 
 static void module_rekey_region_index(xy_mod_entry_t *me,

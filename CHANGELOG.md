@@ -8,10 +8,13 @@
   falls back to comparing that stored string against `dladdr()`'s full mapped
   path, found a mismatch, and dropped *every hook* of the module: sessions
   never resolved and `require_login` silently granted on OpenBSD while
-  path-loaded modules kept working. The resolver now searches
-  `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS) exactly as `dlopen()` does
-  and stores the canonical path; unresolvable names keep the old bare-name
-  behaviour. Covered by `test_objectpath` (`test_soname_resolves_via_ld_library_path`,
+  path-loaded modules kept working (confirmed live: wrong-password POST
+  rendered the full HTML form from `mods/auth` while `POST /song/add`
+  without a cookie returned 415 instead of 401). The resolver now searches
+  `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS) exactly as `dlopen()` does,
+  then the compiled-in system defaults (`/lib`, `/usr/lib`, `/usr/local/lib`)
+  covering daemons that run with no `LD_LIBRARY_PATH` at all, and stores the
+  canonical path; unresolvable names keep the old bare-name behaviour. Covered by `test_objectpath` (`test_soname_resolves_via_ld_library_path`,
   `test_unresolvable_keeps_bare_name`).
 
 - **Region identity is `(id, plen)`, never `id` alone.** The id is only *half* a
