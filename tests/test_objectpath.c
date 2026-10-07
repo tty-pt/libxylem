@@ -3,8 +3,10 @@
  * everywhere, so the fallback the BSD/macOS CI jobs take is also checked
  * on Linux/glibc. */
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "../src/libxylem-internal.h"
@@ -56,6 +58,65 @@ static void test_distinct_files(void) {
 	printf("  test_distinct_files: PASS\n");
 }
 
+/* Soname-form loads ("libaxil-auth") must resolve against LD_LIBRARY_PATH.
+ * module_load_path() is what xy_load stores as the module identity, and on
+ * platforms without dlinfo() (macOS, OpenBSD) module_symbol_is_local()
+ * compares that stored string against dladdr()'s full mapped path. A bare
+ * "name.so" can never match, so EVERY hook of a soname-loaded module was
+ * dropped there -- live incident: sessions never resolved on OpenBSD while
+ * path-loaded modules kept their hooks. These tests run with CWD at the
+ * repo root (Makefile test target), where no bare "mod_basic.so" exists,
+ * so only a real library-path search can resolve it. */
+static void test_soname_resolves_via_ld_library_path(void) {
+	char mods_abs[PATH_MAX];
+	char *old = getenv("LD_LIBRARY_PATH");
+	char oldbuf[4096] = {0};
+	if (old)
+		snprintf(oldbuf, sizeof(oldbuf), "%s", old);
+
+	assert(realpath("./tests/mods", mods_abs) != NULL);
+	setenv("LD_LIBRARY_PATH", mods_abs, 1);
+
+	char *resolved = module_load_path("mod_basic");
+	assert(resolved != NULL);
+
+	char want[PATH_MAX];
+	snprintf(want, sizeof(want), "%s/mod_basic.so", mods_abs);
+	/* Canonical absolute path ... */
+	assert(strcmp(resolved, want) == 0);
+	/* ... agreeing (by file identity, not string) with every spelling
+	 * dladdr() or a caller might report. */
+	assert(module_same_file(resolved, "./tests/mods/mod_basic.so") == 1);
+	assert(module_same_file(resolved, "tests/mods/mod_basic.so") == 1);
+	free(resolved);
+
+	if (oldbuf[0])
+		setenv("LD_LIBRARY_PATH", oldbuf, 1);
+	else
+		unsetenv("LD_LIBRARY_PATH");
+	printf("  test_soname_resolves_via_ld_library_path: PASS\n");
+}
+
+static void test_unresolvable_keeps_bare_name(void) {
+	char *old = getenv("LD_LIBRARY_PATH");
+	char oldbuf[4096] = {0};
+	if (old)
+		snprintf(oldbuf, sizeof(oldbuf), "%s", old);
+
+	setenv("LD_LIBRARY_PATH", "/nonexistent-dir-xy-test", 1);
+	char *resolved = module_load_path("definitely_not_a_module_xyz");
+	assert(resolved != NULL);
+	/* Unresolvable stays exactly as before: bare name, dlopen's problem. */
+	assert(strcmp(resolved, "definitely_not_a_module_xyz.so") == 0);
+	free(resolved);
+
+	if (oldbuf[0])
+		setenv("LD_LIBRARY_PATH", oldbuf, 1);
+	else
+		unsetenv("LD_LIBRARY_PATH");
+	printf("  test_unresolvable_keeps_bare_name: PASS\n");
+}
+
 int main(void) {
 	printf("test_objectpath:\n");
 
@@ -64,6 +125,8 @@ int main(void) {
 	test_dotted_spellings();
 	test_symlink();
 	test_distinct_files();
+	test_soname_resolves_via_ld_library_path();
+	test_unresolvable_keeps_bare_name();
 
 	printf("  all tests passed\n");
 	return 0;

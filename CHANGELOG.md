@@ -1,5 +1,19 @@
 ## 1.5.0 (unreleased)
 
+- **Soname loads resolve against `LD_LIBRARY_PATH` before identity is
+  stored.** `module_load_path()` appended the extension and tried `realpath()`
+  only, which never searches the loader path -- so a bare `"libaxil-auth"`
+  stayed a bare `"libaxil-auth.so"` while `dlopen()` mapped the real file
+  elsewhere. On platforms without `dlinfo()` (macOS, OpenBSD) hook locality
+  falls back to comparing that stored string against `dladdr()`'s full mapped
+  path, found a mismatch, and dropped *every hook* of the module: sessions
+  never resolved and `require_login` silently granted on OpenBSD while
+  path-loaded modules kept working. The resolver now searches
+  `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS) exactly as `dlopen()` does
+  and stores the canonical path; unresolvable names keep the old bare-name
+  behaviour. Covered by `test_objectpath` (`test_soname_resolves_via_ld_library_path`,
+  `test_unresolvable_keeps_bare_name`).
+
 - **Region identity is `(id, plen)`, never `id` alone.** The id is only *half* a
   region's key, and it is not unique across the tree: the left half of a region
   has exactly its parent's numeric id, so cosmos `(0,0)`, world 0 `(0,16)`, its

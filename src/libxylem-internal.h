@@ -103,6 +103,12 @@ int module_symbol_is_local(const xy_mod_entry_t *me, void *sym);
  * path we passed to dlopen).  Also the module-identity fallback used on
  * platforms without dlinfo(); exported for test_objectpath. */
 int module_same_file(const char *a, const char *b);
+/* Canonical path used for module identity and dlopen: appends the platform
+ * extension and resolves via realpath(), searching LD_LIBRARY_PATH (and
+ * DYLD_LIBRARY_PATH) for bare sonames exactly as dlopen() does, so the
+ * stored identity matches what dladdr() later reports. Exported for
+ * test_objectpath; callers own the returned string. */
+char *module_load_path(const char *fname);
 void xy_zero_ret(void *retp, const xy_adapter_t *reg);
 static inline void __attribute__((always_inline))
 xy_set_last_ret(const void *retp, size_t ret_size)

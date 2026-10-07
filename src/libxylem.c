@@ -438,8 +438,16 @@ mod_key_len(const char *path)
  * We keep module_path in xy_t as the caller's original fname, but module
  * identity is keyed by the resolved file so aliases like "../mods/song" and
  * "mods/song" collapse to the same entry.
+ *
+ * A bare soname ("libaxil-auth", no slash) is additionally searched for in
+ * LD_LIBRARY_PATH (DYLD_LIBRARY_PATH on macOS), mirroring what dlopen()
+ * itself does. Without this the stored identity stays a bare "name.so"
+ * while dladdr() reports the full mapped path, and the no-dlinfo locality
+ * fallback (macOS, OpenBSD) compares the two spellings, finds a mismatch
+ * and drops every hook of the module. Unresolvable names keep the old
+ * behaviour exactly: the bare "name.so" is returned for dlopen to fail on.
  */
-static char *
+char *
 module_load_path(const char *fname)
 {
 #ifdef _WIN32
@@ -481,6 +489,49 @@ module_load_path(const char *fname)
 	if (resolved) {
 		free(buf);
 		return resolved;
+	}
+	/* realpath() does not search the loader path: a bare soname that
+	 * only exists under LD_LIBRARY_PATH (the normal case for external
+	 * libraries) would otherwise stay unresolved here while dlopen()
+	 * finds it fine, leaving identity as a bare name no dladdr()
+	 * spelling can match. Search exactly the directories dlopen()
+	 * searches, in order. */
+	if (!strchr(buf, '/')) {
+		static const char *const ld_vars[] = {
+			"LD_LIBRARY_PATH",
+			"DYLD_LIBRARY_PATH",
+		};
+		for (size_t v = 0;
+		     v < sizeof(ld_vars) / sizeof(ld_vars[0]); v++) {
+			const char *ld = getenv(ld_vars[v]);
+			if (!ld || !*ld)
+				continue;
+			const char *p = ld;
+			while (*p) {
+				const char *end = strchr(p, ':');
+				size_t dlen = end ? (size_t)(end - p)
+				                  : strlen(p);
+				/* Empty entries mean CWD; realpath() above
+				 * already covered it. */
+				if (dlen > 0) {
+					size_t clen = dlen + 1 + flen + elen + 1;
+					char *cand = malloc(clen);
+					if (!cand)
+						break;
+					memcpy(cand, p, dlen);
+					cand[dlen] = '/';
+					memcpy(cand + dlen + 1, buf,
+					       flen + elen + 1);
+					resolved = realpath(cand, NULL);
+					free(cand);
+					if (resolved) {
+						free(buf);
+						return resolved;
+					}
+				}
+				p = end ? end + 1 : p + dlen;
+			}
+		}
 	}
 	return buf;
 #endif
