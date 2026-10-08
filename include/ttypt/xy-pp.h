@@ -146,7 +146,21 @@
 #define XY_DA_13(a, b, ...)  b, XY_DA_12(__VA_ARGS__)
 #define XY_DA_14(a, b, ...)  b, XY_DA_13(__VA_ARGS__)
 #define XY_DA_15(a, b, ...)  b, XY_DA_14(__VA_ARGS__)
-#define XY_DA_16(a, b, ...)  b, XY_DA_15(__VA_ARGS__)
+#define XY_DA_16(a, b, ...)   b, XY_DA_15(__VA_ARGS__)
+
+/* Zero-argument rungs.
+ *
+ * XY_PC() counts (type, name) *pairs*, so a hook with no parameters -- spelled
+ * `XY_*(ftype, name, void)` (or with the pair list omitted entirely) -- counts
+ * 0 and lands here instead of on XY_*_1. All four are deliberately empty: the
+ * parameter list is `()`, the args struct has no members, its initializer is
+ * empty and nothing is passed through. Both sides of a dispatch are built from
+ * this same header, so both see the same (empty) layout.
+ */
+#define XY_FA_0(...)
+#define XY_PG_0(...)
+#define XY_NP_0(...)
+#define XY_DA_0(...)
 
 /**
  * @brief Stringize a token without macro expansion.
