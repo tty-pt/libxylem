@@ -4,9 +4,7 @@
  * This mirrors the site/mods/auth pattern where get_request_user ->
  * call_get_session_user from within a module body.
  */
-#define PTR_ARGS_IMPL
-#include "ptr_args.h"
-#undef PTR_ARGS_IMPL
+const char *ptr_lookup(const char *token);
 #include "../../src/papi.h"
 #include <string.h>
 #include "mod_ctx_abi.h"
