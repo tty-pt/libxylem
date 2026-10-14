@@ -200,11 +200,23 @@ hook dispatch) and return `Result<(), XyError>` or the relevant value.
 | `reload(xy, path)` | `unsafe fn reload(xy: &XyCtx, path: &CStr) -> Result<(), XyError>` | Reload a module in-place |
 | `deny(xy, what, ty)` | `unsafe fn deny(xy: &XyCtx, what: &CStr, ty: XyDenyType) -> Result<(), XyError>` | Deny a hook or module in the current region |
 | `require_claim(xy, handler, ud)` | `unsafe fn require_claim(xy: &XyCtx, handler: Option<XyClaimHandlerFn>, ud: *mut c_void) -> Result<(), XyError>` | Set a claim handler for child regions |
-| `region_each(xy, f, ud)` | `unsafe fn region_each(xy: &XyCtx, f: Option<XyRegionEachCbFn>, ud: *mut c_void) -> Result<(), XyError>` | Iterate over child regions |
-| `with_region(xy, region_id, f, ud)` | `unsafe fn with_region(xy: &XyCtx, region_id: u64, f: Option<XyScopeFn>, ud: *mut c_void) -> Result<(), XyError>` | Execute a closure in the context of a specific region |
-| `current_region(xy)` | `unsafe fn current_region(xy: &XyCtx) -> u64` | Return the current region ID |
+| `region_each(xy, f, ud)` | `unsafe fn region_each(xy: &XyCtx, f: Option<XyRegionEachCbFn>, ud: *mut c_void) -> Result<(), XyError>` | Iterate over immediate child regions. `XyRegionEachCbFn` is `fn(child_id: u64, plen: u8, ud: *mut c_void)` — the width is reported alongside the id |
+| `with_region(xy, region_id, plen, f, ud)` | `unsafe fn with_region(xy: &XyCtx, region_id: u64, plen: u8, f: Option<XyScopeFn>, ud: *mut c_void) -> Result<(), XyError>` | Execute a closure in the context of region `(region_id, plen)`. `NotFound` unless that pair exists |
+| `current_region(xy)` | `unsafe fn current_region(xy: &XyCtx) -> u64` | Return the current region's **id half only** — not a unique name |
+| `current_region_plen(xy)` | `unsafe fn current_region_plen(xy: &XyCtx) -> u8` | Return the current region's width in bits (the other half of the identity). `0` is the root, not a sentinel |
+| `region_exists(xy, region_id, plen)` | `unsafe fn region_exists(xy: &XyCtx, region_id: u64, plen: u8) -> Result<(), XyError>` | Whether region `(region_id, plen)` exists. Both halves required: four regions share `id == 0` |
 
-Example — a module that loads a peer module and then operates in a child region:
+> **A region is identified by the pair `(id, plen)`, never the id alone.** The
+> leftmost child of a region has exactly its parent's numeric id, so
+> `(0, 0)`, `(0, 16)`, `(0, 17)` and `(0, 64)` are four distinct regions that all
+> report `region_id == 0`. `with_region` and `region_exists` therefore both
+> require `plen`, and `current_region` must be paired with
+> `current_region_plen`. The id-only `xy_region_plen(id)` lookup was removed:
+> looking up by id alone is a query rather than a lookup, and its `uint8_t` return
+> could not tell the root's real width of `0` from "not found".
+
+Example — a module that loads a peer module and then operates in a child region
+(the child must be named by id *and* width):
 
 ```rust
 use core::ffi::{c_int, c_void};

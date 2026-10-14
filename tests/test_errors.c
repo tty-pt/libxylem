@@ -34,7 +34,11 @@ static void test_errno_persists(void) {
 	assert(dummy_hook_adapter.name[0] != '\0');
 	int result = dummy_hook(42);
 	(void)result;
-	assert(xy_errno() == XY_OK);
+	/* No module implements dummy_hook, so the dispatch has zero listeners
+	 * and xy_call() reports XY_ERR_NOTFOUND, which xy_errno() then carries.
+	 * The point of the test is that the load failure did not mask it and
+	 * that errno tracks the call. */
+	assert(xy_errno() == XY_ERR_NOTFOUND);
 	printf("  test_errno_persists: PASS\n");
 }
 

@@ -227,8 +227,39 @@ region_rebuild_hook_dispatch(xy_region_entry_t *re, int hook_id,
 	return XY_OK;
 }
 
-int __attribute__((hot, flatten))
-xy_call(void *retp, xy_adapter_t *reg, void *arg)
+/* True when any ancestor in @p anc denied this module's path.  Same predicate
+ * region_rebuild_hook_dispatch() applies to the cached subtree vector; the
+ * self-scope walk has no cache to inherit it from, so it asks again here. */
+static inline int
+module_denied_by_ancestors(xy_region_entry_t **anc, int anc_n,
+                           const xy_mod_entry_t *me)
+{
+	if (anc_n <= 0 || !me->load_path)
+		return 0;
+	for (int i = 0; i < anc_n; i++) {
+		if (module_is_denied(anc[i], me->load_path))
+			return 1;
+	}
+	return 0;
+}
+
+/* Shared dispatch core.
+ *
+ * self_only == 0: xy_call's subtree scope — the current region's modules and
+ * every descendant region's, via the cached subtree_mods vector.
+ *
+ * self_only != 0: exact-region scope — the current region's OWN modules only.
+ * No descendant is walked, so a module belonging to a child region never runs,
+ * and a parent region's module never runs either.  That is the point: a
+ * coarse-to-fine ancestor walk then gets exactly one observable turn per
+ * region instead of re-running each region's whole subtree once per level.
+ *
+ * Both scopes share the deny checks, the per-module hook resolution, and the
+ * xy_last_publish() bookkeeping, so a handler chain observes the same
+ * predecessor semantics either way (T1.5: module N is entered with
+ * xy_last_ran == N-1). */
+static int __attribute__((hot, flatten))
+xy_dispatch(void *retp, xy_adapter_t *reg, void *arg, int self_only)
 {
 	int ret = XY_OK;
 
@@ -251,6 +282,7 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 	int hook_id = reg->hook_id;
 	void (*dispatch_call)(void *, void *, void *) = reg->call;
 	uint64_t region_id = xy_current_region_id;
+	uint8_t  region_plen = region_current_plen();
 	xy_region_entry_t *caller_region_entry = xy_current_region_entry;
 	xy_region_entry_t *anc_chain[65];
 	int anc_n = 0;
@@ -291,14 +323,41 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 	}
 
 	if (unlikely(!caller_region_entry))
-		caller_region_entry = region_lookup(region_id);
+		caller_region_entry = region_lookup(region_id, region_plen);
 
-	uint8_t sflags = caller_region_entry ? caller_region_entry->subtree_flags : 0;
-	if (unlikely(sflags & XY_SUBTREE_ANY_MASK) && caller_region_entry)
+	if (caller_region_entry)
 		anc_n = region_ancestor_chain(caller_region_entry, anc_chain, 65);
 
+	/* Gate the deny checks on the flag at the ROOT of the caller's chain.
+	 *
+	 * region_propagate_deny() sets XY_SUBTREE_HAS_DENY on the denying
+	 * region and *upward* through its parents, so anc_chain[0] (the root)
+	 * is the one entry that summarises "some region in this tree denies
+	 * something".  Reading the flag off the caller's own entry instead looks
+	 * at the wrong end of the chain: it is set only by denies at or *below*
+	 * the caller, which is exactly the set of regions the ancestor walk
+	 * below does not consult.  That mismatch made a root-level xy_deny
+	 * silently inert for every dispatch made from a descendant — the walk
+	 * was skipped outright — while the same deny did fire for a dispatch
+	 * made from the root itself, because the caller then happened to be the
+	 * root.  So the behaviour was the exact inverse of xy.h's documented
+	 * "a deny applies to sub-regions only" in both directions.
+	 *
+	 * Cost note: the chain is now walked whenever there is a caller region,
+	 * rather than only when the caller's own subtree was known dirty.  It is
+	 * a bounded pointer chase (depth <= 65), and both CP-4 dispatch scopes
+	 * need the chain anyway -- xy_call_self() asks
+	 * module_denied_by_ancestors() per module, and the cached subtree path
+	 * hands it to region_rebuild_hook_dispatch().
+	 */
+	uint8_t sflags = anc_n > 0 ? anc_chain[0]->subtree_flags : 0;
+
 	if (unlikely(sflags & XY_SUBTREE_SECURITY_MASK)) {
-		for (int i = 0; i < anc_n; i++) {
+		/* Ancestors only, never the caller's own region: xy_deny() is
+		 * documented as applying to sub-regions, so a region must still
+		 * be able to dispatch its own hooks after denying one of them.
+		 * anc_chain[anc_n - 1] is the caller, hence the -1 bound. */
+		for (int i = 0; i < anc_n - 1; i++) {
 			if (anc_chain[i]->denied_hooks_set &&
 			    corm_get(anc_chain[i]->denied_hooks_set, reg->name)) {
 				ret = XY_ERR_EPERM;
@@ -312,6 +371,37 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 	xy.adapter = reg;
 
 	if (caller_region_entry) {
+		if (self_only) {
+			/* Exact region: this region's own modules, in load
+			 * order, and nothing from any child region. */
+			for (xy_mod_entry_t *me = caller_region_entry->mods_head;
+			     me; me = me->region_next) {
+				if (!me || !me->ctx)
+					continue;
+				if (module_denied_by_ancestors(anc_chain, anc_n, me))
+					continue;
+				if (!module_has_hook_implemented(me, hook_id)) {
+					void *cb = fn_cache_resolve(me, hook_id,
+					                            reg->name);
+					if (unlikely(cb == XY_FN_RESOLVE_OOM)) {
+						ret = XY_ERR_INVALID;
+						goto fail;
+					}
+					if (!cb || !module_has_hook_implemented(me, hook_id))
+						continue;
+				}
+				xy_t *ctx = me->ctx;
+				ctx->adapter = reg;
+				ctx->region_state = me->region_state;
+				/* Every module on this list belongs to
+				 * caller_region_entry by construction, so
+				 * the current region is already right and
+				 * never needs switching. */
+				dispatch_call(retp, me->fn_cache[hook_id], arg);
+				ran++;
+				xy_last_publish(ran, retp, reg);
+			}
+		} else {
 		if (unlikely(caller_region_entry->subtree_mods_dirty) &&
 		    region_rebuild_subtree_mods(caller_region_entry) < 0) {
 			ret = XY_ERR_INVALID;
@@ -341,7 +431,10 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 				ctx->adapter = reg;
 				ctx->region_state = me->region_state;
 
-				uint64_t region_changed = (ctx->region_id != region_id);
+				/* Compare region entries, not ids: (0,16) and (0,17)
+				 * share an id, so an id compare would call these the
+				 * same region and inject the wrong xy.region_state. */
+				int region_changed = (me->region_entry != caller_region_entry);
 				if (unlikely(region_changed)) {
 					xy_region_entry_t *prev_rentry = xy_current_region_entry;
 					set_current_region(ctx->region_id, me->region_entry);
@@ -365,7 +458,7 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 				ctx->region_state = me->region_state;
 
 				xy_region_entry_t *prev_rentry = xy_current_region_entry;
-				uint64_t region_changed = (ctx->region_id != region_id);
+				int region_changed = (me->region_entry != caller_region_entry);
 				if (unlikely(region_changed))
 					set_current_region(ctx->region_id, me->region_entry);
 
@@ -376,6 +469,7 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 				ran++;
 				xy_last_publish(ran, retp, reg);
 			}
+		}
 		}
 	}
 
@@ -398,6 +492,18 @@ fail:
 	xy.adapter = reg;
 	XY_SET_ERR(ret);
 	return ret;
+}
+
+int __attribute__((hot, flatten))
+xy_call(void *retp, xy_adapter_t *reg, void *arg)
+{
+	return xy_dispatch(retp, reg, arg, 0);
+}
+
+int __attribute__((hot, flatten))
+xy_call_self(void *retp, xy_adapter_t *reg, void *arg)
+{
+	return xy_dispatch(retp, reg, arg, 1);
 }
 
 /* -------------------------------------------------------------------------

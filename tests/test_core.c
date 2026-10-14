@@ -28,8 +28,13 @@ static void test_strerror(void) {
 
 static void test_errno_after_call(void) {
 	int result;
-	XY_CALL(&result, test_hook, 1, 2);
-	assert(xy_errno() == XY_OK);
+	/* No module is loaded anywhere in this test binary, so this dispatch has
+	 * zero listeners.  xy_call() correctly reports XY_ERR_NOTFOUND and
+	 * publishes that through xy_errno(); it must not report success. */
+	struct test_hook_args args = { .a = 1, .b = 2 };
+	int ret = xy_call(&result, &test_hook_adapter, &args);
+	assert(ret == XY_ERR_NOTFOUND);
+	assert(xy_errno() == XY_ERR_NOTFOUND);
 	printf("  test_errno_after_call: PASS\n");
 }
 

@@ -38,6 +38,11 @@ void _xy_init(void *ptr, const char *fname,
 	ctx->deny             = xy_deny;
 	ctx->require_claim    = xy_require_claim;
 	ctx->region_each      = xy_region_each;
+	ctx->current_region_plen = xy_current_region_plen;
+	ctx->region_exists    = xy_region_exists;
+	ctx->claim_at         = xy_claim_at;
+	ctx->region_at        = xy_region_at;
+	ctx->call_self        = xy_call_self;
 	ctx->with_region      = xy_with_region;
 	ctx->current_region   = xy_current_region;
 	ctx->unload           = xy_unload;
@@ -46,7 +51,8 @@ void _xy_init(void *ptr, const char *fname,
 
 int _mod_load(char *fname) {
 	xy_load_txn_t tx = {
-		.inherited_region_id = xy_current_region_id,
+		.inherited_region_id   = xy_current_region_id,
+		.inherited_region_plen = region_current_plen(),
 	};
 	int ret = XY_OK;
 
@@ -93,7 +99,8 @@ int _mod_load(char *fname) {
 		}
 	}
 	{
-		xy_region_entry_t *re = region_lookup(tx.mod_entry->region_id);
+		xy_region_entry_t *re = region_lookup(tx.mod_entry->region_id,
+		                                      tx.mod_entry->region_plen);
 		if (re)
 			module_region_append(re, tx.mod_entry);
 	}
@@ -133,9 +140,9 @@ int xy_load(char *fname) {
  * has its refcount decremented and stays active.
  */
 int
-_mod_unload(char *fname, uint64_t region_id)
+_mod_unload(char *fname, uint64_t region_id, uint8_t plen)
 {
-	xy_lookup_result_t lookup = module_lookup_from_fname(fname, region_id);
+	xy_lookup_result_t lookup = module_lookup_from_fname(fname, region_id, plen);
 	if (lookup.err != XY_OK) {
 		XY_SET_ERR(lookup.err);
 		return lookup.err;
@@ -180,7 +187,8 @@ _mod_unload(char *fname, uint64_t region_id)
 			const char *child_path = child && child->ctx
 				? child->ctx->module_path : NULL;
 			if (child_path)
-				_mod_unload((char *)child_path, child->region_id);
+				_mod_unload((char *)child_path, child->region_id,
+				            child->region_plen);
 		}
 		free(children);
 	}
@@ -196,7 +204,11 @@ _mod_unload(char *fname, uint64_t region_id)
 	module_region_detach(entry);
 
 	/* Remove from hash maps */
-	corm_del(mod_by_region_hd, &entry->region_id);
+	{
+		xy_region_key_t rk;
+		region_key(&rk, entry->region_id, entry->region_plen);
+		corm_del(mod_by_region_hd, &rk);
+	}
 	corm_del(mod_hd, entry->mod_key);
 
 	xy_mod_count--;
@@ -216,7 +228,7 @@ int xy_unload(char *fname) {
 		return enter_ret;
 	}
 	uint64_t region_id = xy_current_region_id;
-	int ret = _mod_unload(fname, region_id);
+	int ret = _mod_unload(fname, region_id, region_current_plen());
 	XY_SET_ERR(ret);
 	return ret;
 }
@@ -230,9 +242,11 @@ int xy_reload(char *fname) {
 		return enter_ret;
 	}
 	uint64_t region_id = xy_current_region_id;
+	uint8_t  region_plen = region_current_plen();
 
 	/* Find the existing entry to record its position */
-	xy_lookup_result_t lookup = module_lookup_from_fname(fname, region_id);
+	xy_lookup_result_t lookup = module_lookup_from_fname(fname, region_id,
+	                                                    region_plen);
 	if (lookup.err != XY_OK) {
 		XY_SET_ERR(lookup.err);
 		return lookup.err;
@@ -250,7 +264,7 @@ int xy_reload(char *fname) {
 	xy_region_entry_t *re = existing->region_entry;
 
 	/* Unload — this removes the entry from the list */
-	int uret = _mod_unload(fname, region_id);
+	int uret = _mod_unload(fname, region_id, region_plen);
 	if (uret != XY_OK) {
 		XY_SET_ERR(uret);
 		return uret;
@@ -267,7 +281,7 @@ int xy_reload(char *fname) {
 	}
 
 	/* Re-find the newly loaded entry */
-	lookup = module_lookup_from_fname(fname, region_id);
+	lookup = module_lookup_from_fname(fname, region_id, region_plen);
 	if (lookup.err != XY_OK) {
 		XY_SET_ERR(lookup.err);
 		return lookup.err;
