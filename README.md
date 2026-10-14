@@ -1,10 +1,15 @@
+<p align="center">
+  <img src="assets/logo.png" alt="libxylem logo" width="220" />
+</p>
+
 # libxylem
 
 [![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
 [![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![Hook modules](https://img.shields.io/badge/hook-modules-4B8BBE)](#)
+[![Region Isolation](https://img.shields.io/badge/security-regions-16A34A)](#)
 
-> Hook-based extensibility and dynamic module loading.
+> Typed hook-based extensibility, dynamic module loading, and hierarchical region isolation.
 
 A small C library for hook-based extensibility and dynamic module loading. The
 host program defines **hooks** — typed dispatch points — and loads **modules**
