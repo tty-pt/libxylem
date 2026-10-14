@@ -1,4 +1,4 @@
-## 1.5.0 (unreleased)
+## 1.5.0
 
 - **Soname loads resolve against `LD_LIBRARY_PATH` before identity is
   stored.** `module_load_path()` appended the extension and tried `realpath()`

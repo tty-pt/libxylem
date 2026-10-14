@@ -80,7 +80,7 @@ static void test_soname_resolves_via_ld_library_path(void) {
 	char *resolved = module_load_path("mod_basic");
 	assert(resolved != NULL);
 
-	char want[PATH_MAX];
+	char want[PATH_MAX + 32];
 	snprintf(want, sizeof(want), "%s/mod_basic.so", mods_abs);
 	/* Canonical absolute path ... */
 	assert(strcmp(resolved, want) == 0);

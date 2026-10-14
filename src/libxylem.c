@@ -6,6 +6,7 @@
 #ifndef O_BINARY
 #define O_BINARY 0	/* MinGW open() is text-mode by default; binary for pipes/files */
 #endif
+#include <stdlib.h>
 #ifndef _WIN32
 #include <dlfcn.h>	/* dladdr/Dl_info only — address→module introspection,
 			 * distinct from the dlopen/dlsym/dlclose/dlerror quad
@@ -488,7 +489,7 @@ module_load_path(const char *fname)
 		return NULL;
 	memcpy(buf, fname, flen);
 	memcpy(buf + flen, ext, elen + 1);
-	char *resolved = realpath(buf, NULL);
+	char *resolved = qsys_realpath(buf, NULL);
 	if (resolved) {
 		free(buf);
 		return resolved;
@@ -563,7 +564,7 @@ module_search_path_list(const char *list, const char *leaf, size_t leaflen)
 			memcpy(cand, p, dlen);
 			cand[dlen] = '/';
 			memcpy(cand + dlen + 1, leaf, leaflen);
-			resolved = realpath(cand, NULL);
+			resolved = qsys_realpath(cand, NULL);
 			free(cand);
 			if (resolved)
 				return resolved;

@@ -199,9 +199,12 @@ typedef void (*mod_cb_t)(void);
  */
 #define XY_DECL(ftype, fname, ...) \
 	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wpedantic\"") \
 	struct fname##_args { \
 		XY_PG(__VA_ARGS__) \
 	}; \
+	_Pragma("GCC diagnostic pop") \
 	static xy_adapter_t __xy_decl_##fname##_adapter = { \
 		.name = XSTR(fname), \
 		.arg_size = sizeof(struct fname##_args), \
@@ -227,9 +230,12 @@ typedef void (*mod_cb_t)(void);
  */
 #define XY_DEF(ftype, fname, ...) \
 	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wpedantic\"") \
 	struct fname##_args { \
 		XY_PG(__VA_ARGS__) \
 	}; \
+	_Pragma("GCC diagnostic pop") \
 	static xy_adapter_t __xy_decl_##fname##_adapter = { \
 		.name = XSTR(fname), \
 		.arg_size = sizeof(struct fname##_args), \
@@ -297,9 +303,12 @@ typedef void (*mod_cb_t)(void);
 #define XY_IMPL(ftype, fname, ...) \
 	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
 	fname##_t fname; \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wpedantic\"") \
 	struct fname##_args { \
 		XY_PG(__VA_ARGS__) \
 	}; \
+	_Pragma("GCC diagnostic pop") \
 	extern xy_adapter_t fname##_adapter; \
 	_Static_assert(sizeof(ftype) <= XY_MAX_RET_SIZE, \
 		"return type too large for xy_adapter_t"); \
