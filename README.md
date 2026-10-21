@@ -11,18 +11,47 @@
 
 > Hook-based plugin architecture, dynamic module loading, and hierarchical region isolation for C applications.
 
----
-
-## Module Architecture
-
-`libxylem` provides a typed hook dispatch and dynamic module loading engine:
-- **Host Integration**: Enables daemons like [axil](https://github.com/tty-pt/axil) to load `.so` modules dynamically at runtime.
-- **Fast Storage**: Backed by [libcorm](https://github.com/tty-pt/libcorm) for internal hook tables and region namespaces.
-- **Hierarchical Isolation**: Partitions the module graph into scoped regions, enforcing claim contracts and call denials.
+`libxylem` is the universal cross-module dispatch layer across the `tty-pt` platform. It replaces brittle dynamic linking and fragile function pointer tables with typed hook dispatches (`XY_DEF`, `XY_DECL`, `XY_IMPL`), automatic module discovery, and hierarchical region sandboxing.
 
 ---
 
-## Quickstart
+## Contents
+
+- [Architecture & The Two-Header Rule](#architecture--the-two-header-rule)
+- [Module Discovery & SONAME Resolution](#module-discovery--soname-resolution)
+- [Quickstart: Host & Plugin](#quickstart-host--plugin)
+- [Core API Reference](#core-api-reference)
+- [Design Philosophy: Regions as Security Firewalls](#design-philosophy-regions-as-security-firewalls)
+- [Installation & Build](#installation--build)
+- [License](#license)
+
+---
+
+## Architecture & The Two-Header Rule
+
+To prevent symbol pollution and enforce strict encapsulation across shared `.so` boundaries, `libxylem` enforces the **Two-Header Rule**:
+
+1. **`module-types.h` (Shared Types Header)**: Contains shared structs, enums, and typedefs. Both caller and implementer include this header.
+2. **`module.h` (Hook Declaration Header)**: Declares typed hook dispatches via `XY_DECL()`. Consumers include this header to call the hook. The module implementation includes `module-types.h` and defines `XY_IMPL()`, but **never** includes `module.h`.
+
+This rule eliminates `#ifdef *_IMPL` preprocessor switches and ensures compile-time type safety across dynamically loaded modules.
+
+---
+
+## Module Discovery & SONAME Resolution
+
+When loading plugins via `xy_load(name)`, `libxylem` dynamically resolves targets:
+
+1. **Explicit Relative/Absolute Paths**: E.g. `xy_load("./mods/scoreboard.so")` loads the exact file.
+2. **SONAME & Module Resolution**: If given a short name (e.g. `xy_load("axil-auth")`), `libxylem` searches:
+   - Paths listed in `LD_LIBRARY_PATH`.
+   - The caller's module directory (`./mods/`, `lib/`).
+   - Standard system library prefixes (`/usr/local/lib`, `/usr/lib`).
+3. **ABI Generation Verification**: Checks `XY_CTX_ABI_VER` before executing `.init_array`, safely rejecting mismatched or stale shared libraries.
+
+---
+
+## Quickstart: Host & Plugin
 
 Define a typed hook in the host, implement it in a shared module, and dispatch:
 
