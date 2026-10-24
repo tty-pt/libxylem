@@ -113,6 +113,7 @@ cc -o mods/scoreboard.so mods/scoreboard.c -fPIC -shared -lxylem
 * **Hierarchical Plugin Sandboxing**: Regions constrain hook dispatch. A hook call dispatches strictly to descendant modules in the caller's region.
 * **ABI Generation Guards**: `XY_CTX_ABI_VER` verification refuses mismatched or stale `.so` modules at load time before execution starts.
 * **Zero Boilerplate**: Modules register listeners automatically at load time via `.init_array`, requiring no manual dispatch registration lists.
+* **In-WASM Hook Dispatcher**: Includes `src/libxylem-wasm.c`, an embedded hook registry and dispatcher for WebAssembly environments. Supports `XY_DECL`, `XY_IMPL`, `XY_LISTENER_TAG`, `xy_call`, and `xy_last` listener chaining directly inside browser WASM runtimes without requiring host OS `dlopen`.
 
 ---
 

@@ -1,4 +1,15 @@
-## 1.5.0
+## [1.6.0]
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/tty-pt/libxylem/main/assets/logo.png" alt="libxylem logo" width="220" />
+</p>
+
+- **In-WASM Xylem Hook Dispatcher (`src/libxylem-wasm.c`, `include/ttypt/xy-mod.h`)**:
+  - Introduced lightweight in-WASM hook registry and dispatcher for isomorphic WebAssembly runtimes.
+  - Supported `XY_DECL`, `XY_IMPL`, `XY_LISTENER_TAG`, `xy_call`, `xy_last`, and listener chaining inside WASM without host OS `dlopen`.
+  - Exported dynamic host-bridge loader and canonical error reporting (`xy_strerror`, `xy_errno`).
+
+## [1.5.0]
 
 - **Soname loads resolve against `LD_LIBRARY_PATH` before identity is
   stored.** `module_load_path()` appended the extension and tried `realpath()`
@@ -162,11 +173,11 @@
   and fixing the last of those unmasked two further wrong load-order assumptions
   in the cascade tests.
 
-## 1.4.2
+## [1.4.2]
 
 - **Fix `xy.last()` inside dispatch handlers**: corrected mid-dispatch state tracking so `xy.last()` returns the predecessor module's result during a handler chain (restoring the expected composition semantics). Also publishes dispatch state via `xy_last_publish` after each call to prevent nested dispatches from leaking results into the outer chain.
 
-## 1.4.0
+## [1.4.0]
 
 - **Renamed `libndx` → `libxylem`**: the `ndx_*` API and headers (`include/ttypt/ndx.h` → `xy.h`, `ndx-mod.h` → `xy-mod.h`, `ndx-pp.h` → `xy-pp.h`, `ndx-watch.h` → `xy-watch.h`; `ndx.pc` → `xylem.pc`). Region/pledge/intercept surface and the `XY_DECL`/`XY_DEF`/`XY_IMPL` module contract are unchanged, only the prefix.
 - **Faster `xy_call` dispatch**: hook-implementation check inlined, fast return-value copy, and a single-listener fast path.

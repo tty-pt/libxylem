@@ -5,6 +5,11 @@
 
 XY_LISTENER(int, get_counter, int, dummy);
 
+int get_counter(int dummy) {
+	(void)dummy;
+	return 0;
+}
+
 /* Helper: path without .so suffix */
 #define MOD_PATH         "tests/mods/mod_unload"
 #define MOD_PATH2        "tests/mods/mod_unload2"

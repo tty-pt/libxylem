@@ -49,7 +49,13 @@
 #include <stdint.h>
 #include <string.h>
 #include <ttypt/xy-pp.h>
+#ifndef __wasm__
 #include <ttypt/qsys.h>
+#else
+#ifndef WARN
+#define WARN(...) ((void)0)
+#endif
+#endif
 
 /**
  * @brief Maximum size for return types in hooks.
@@ -316,6 +322,9 @@ typedef void (*mod_cb_t)(void);
 	void fname##_adapter_call(void *res, void *fn, void *arg) { \
 	fname##_t *cast_fn; \
 	if (!fn) { \
+		fn = (void *)(uintptr_t)&fname; \
+	} \
+	if (!fn) { \
 		if (res) memset(res, 0, sizeof(ftype)); \
 		WARN("%s_adapter_call: '%s' wasn't defined\n", \
 				XSTR(fname), XSTR(fname)); \
@@ -339,6 +348,50 @@ typedef void (*mod_cb_t)(void);
 	AUTO_INIT \
 	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg; \
 	ftype fname(XY_FA(__VA_ARGS__))
+
+/**
+ * @brief Define a tagged module listener implementation for a hook.
+ *
+ * Emits static functions and adapters tagged with @p tag so that multiple
+ * listeners for the same hook can be compiled into the same library or WASM
+ * reactor without linker symbol collisions.
+ */
+#define XY_LISTENER_TAG(ftype, fname, tag, ...) \
+	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
+	static ftype fname##_##tag(XY_FA(__VA_ARGS__)); \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wpedantic\"") \
+	struct fname##_##tag##_args { \
+		XY_PG(__VA_ARGS__) \
+	}; \
+	_Pragma("GCC diagnostic pop") \
+	static void fname##_##tag##_adapter_call(void *res, void *fn, void *arg) { \
+		fname##_t *cast_fn; \
+		if (!fn) { \
+			fn = (void *)(uintptr_t)&fname##_##tag; \
+		} \
+		if (!fn) { \
+			if (res) memset(res, 0, sizeof(ftype)); \
+			return; \
+		} \
+		* (void **) &cast_fn = fn; \
+		struct fname##_##tag##_args *__xy_a = arg; (void)__xy_a; \
+		ftype result = cast_fn(XY_NP(__VA_ARGS__)); \
+		if (res) *(ftype *)res = result; \
+	} \
+	static xy_adapter_t fname##_##tag##_adapter = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_##tag##_args), \
+		.ret_size = sizeof(ftype), \
+		.call = &fname##_##tag##_adapter_call, \
+		.hook_id = -1, \
+	}; \
+	static void fname##_##tag##_adapter_reg(void) { \
+		xy_areg(XSTR(fname), &fname##_##tag##_adapter); \
+	} \
+	AUTO_INIT \
+	void (*fname##_##tag##_adapter_reg_p)(void) = fname##_##tag##_adapter_reg; \
+	static ftype fname##_##tag(XY_FA(__VA_ARGS__))
 
 /**
  * @brief Call a mod hook by name within the current thread-local region.
@@ -628,6 +681,17 @@ xy_call_self_t      xy_call_self;
 typedef int xy_load_t(char *fname);
 xy_load_t xy_load;
 
+#ifdef __wasm__
+/**
+ * @brief Host import for browser WASM dynamic module streaming and instantiation.
+ */
+__attribute__((import_module("xylem"), import_name("wasm_xy_load_module")))
+int wasm_xy_load_module(const char *name, size_t name_len);
+
+__attribute__((import_module("xylem"), import_name("wasm_xy_unload_module")))
+int wasm_xy_unload_module(const char *name, size_t name_len);
+#endif
+
 /**
  * @brief Unload a previously loaded module from the caller's current region.
  *
@@ -725,7 +789,11 @@ void xy_init(void);
 #define XY_CTX_ABI_VER   3
 
 /** @brief `sizeof(struct xy_ctx)` as asserted by this header. */
+#if defined(__ILP32__) || defined(__wasm32__) || defined(__wasm__)
+#define XY_CTX_SIZE      104
+#else
 #define XY_CTX_SIZE      184
+#endif
 
 /**
  * @brief The value a module must export from `xy_ctx_abi()`.
