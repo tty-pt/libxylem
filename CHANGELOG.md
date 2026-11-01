@@ -1,9 +1,5 @@
 ## [1.7.0]
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/tty-pt/libxylem/main/assets/logo.png" alt="libxylem logo" width="220" />
-</p>
-
 - **In-WASM Xylem Hook Dispatcher (`src/libxylem-wasm.c`, `include/ttypt/xy-mod.h`)**:
   - Introduced lightweight in-WASM hook registry and dispatcher for isomorphic WebAssembly runtimes.
   - Supported `XY_DECL`, `XY_IMPL`, `XY_LISTENER_TAG`, `xy_call`, `xy_last`, and listener chaining inside WASM without host OS `dlopen`.

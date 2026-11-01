@@ -1,0 +1,883 @@
+#ifndef XY_H
+#define XY_H
+
+/**
+ * @file xy.h
+ * @brief Modding and extensibility API.
+ *
+ * @section xy_synopsis Synopsis
+ * @code
+ * XY_DEF(int, on_tick, int, dt);
+ * on_tick(16);
+ * @endcode
+ *
+ * @section xy_overview Overview
+ * libxylem provides a plugin/module system where:
+ * - <b>Host</b> defines hooks and loads modules
+ * - <b>Module</b> implements hooks in a shared library
+ *
+ * @section xy_usage Usage
+ * 1. Host uses XY_DEF to define hook signatures
+ * 2. Host loads modules via xy_load()
+ * 3. Modules use XY_IMPL to implement hooks they provide
+ * 4. Modules include xy-mod.h
+ *
+ * @section xy_deps Dependencies
+ * Dependencies between modules are handled through the API:
+ * - Common headers use XY_DECL for shared hook signatures
+ * - Implementing modules use XY_IMPL to define hooks
+ * - Dependent modules call xy_load() in xy_install() to load dependencies
+ * - Then call hooks as normal functions from dependencies
+ *
+ * @section xy_errors Error Handling
+ * - Functions return XY_OK (0) on success or negative XY_ERR_* on failure
+ * - Use xy_errno() to get last error code
+ * - Use xy_strerror(err) to get human-readable message
+ */
+
+/* RECOMMENDATIONS:
+ *
+ * - Avoid passing entire objects in xy calls. It's not very
+ *   useful since getting / putting things by id can be fast.
+ *   Only when you really don't have another way because you
+ *   modify the object in the calling function and don't put
+ *   and set around the XY_CALL. Usually mods will use their
+ *   custom object types, anyway.
+ */
+
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+#include <ttypt/xy-pp.h>
+#ifndef __wasm__
+#include <ttypt/qsys.h>
+#else
+#ifndef WARN
+#define WARN(...) ((void)0)
+#endif
+#endif
+
+/**
+ * @brief Maximum size for return types in hooks.
+ *
+ * Return types larger than this will cause a compile-time static assertion
+ * when using XY_DEF or XY_IMPL.
+ */
+#define XY_MAX_RET_SIZE 4096
+
+/**
+ * @brief Invalid hook ID returned when lookup fails.
+ */
+#define XY_INVALID ((unsigned) -1)
+
+/**
+ * @brief Mark intentionally-unused symbols or parameters.
+ */
+#define UNUSED __attribute__((unused))
+
+/**
+ * @brief Success return code.
+ */
+#define XY_OK             0
+
+/**
+ * @brief Error: Module or hook not found.
+ */
+#define XY_ERR_NOTFOUND  -1
+
+/**
+ * @brief Error: Invalid argument passed to function.
+ */
+#define XY_ERR_INVALID   -2
+
+/**
+ * @brief Error: Return type exceeds XY_MAX_RET_SIZE / no slot available.
+ */
+#define XY_ERR_TOOBIG    -3
+
+/**
+ * @brief Error: Library initialization failed.
+ */
+#define XY_ERR_INIT      -4
+
+/**
+ * @brief Error: Operation not permitted (deny, claim, unload veto, etc.).
+ */
+#define XY_ERR_EPERM     -5
+
+/**
+ * @brief Error: Module was built against a different xy_ctx ABI.
+ *
+ * Returned by xy_load() when the module's context object cannot be proven at
+ * least as large as the host's (see @ref XY_CTX_ABI_VER and xy_ctx_abi()).
+ * This is deliberately a *load-time refusal* rather than a best-effort write:
+ * see the ABI note above @ref struct xy_ctx for why the alternative is silent
+ * memory corruption.
+ */
+#define XY_ERR_ABI       -6
+
+/**
+ * @brief Adapter for dispatching hook calls to modules.
+ *
+ * This struct is used internally to route calls to all modules
+ * that implement a given hook. Created automatically by XY_IMPL.
+ */
+typedef struct {
+	/** @brief Name of the hook (e.g., "on_tick") */
+	char name[64];
+
+	/** @brief Size of the arguments struct */
+	size_t arg_size;
+
+	/** @brief Size of the return type */
+	size_t ret_size;
+
+	/** @brief Internal call dispatcher */
+	void (*call)(void *, void *, void *);
+
+	/** @brief Monotonic hook ID assigned by xy_areg(); used for O(1) dispatch.
+	 *  Zero-initialised by XY_IMPL; filled in by xy_areg() on first registration. */
+	int hook_id;
+
+	/** @brief Buffer for last return value */
+	char ret[XY_MAX_RET_SIZE];
+
+	/** @brief Number of modules that ran this hook */
+	unsigned ran;
+} xy_adapter_t;
+
+typedef int xy_scope_fn_t(void *ud);
+
+/**
+ * @brief Module callback function type.
+ *
+ * Used for mod_auto_init(), xy_install()
+ */
+typedef void (*mod_cb_t)(void);
+
+#if defined(_WIN32)
+  /**
+   * @brief Export symbol from module (Windows).
+   */
+  #define XY_MODULE_API __declspec(dllexport)
+#else
+  /**
+   * @brief Export symbol from module (POSIX).
+   */
+  #define XY_MODULE_API __attribute__((visibility("default")))
+#endif
+
+#if defined(__APPLE__)
+  /**
+   * @brief Mach-O equivalent of .init_array for macOS.
+   */
+  #define AUTO_INIT __attribute__((used)) __attribute__((section("__DATA,__mod_init_func")))
+#else
+  /**
+   * @brief ELF section for initialization pointers.
+   */
+  #define AUTO_INIT __attribute__((used)) __attribute__((section(".init_array")))
+#endif
+
+#define __XY_DISPATCH(retp, adapterp, argp) \
+	xy_call((retp), (adapterp), (argp))
+
+/* ---------------------------------------------------------------------------
+ * Backward-compat aliases — old macro names.  Keep for a transition period.
+ * ------------------------------------------------------------------------- */
+#ifndef XY_NO_DEPRECATED
+#define XY_HOOK_DEF(...)   XY_DEF(__VA_ARGS__)
+#define XY_HOOK_DECL(...)  XY_DECL(__VA_ARGS__)
+#define XY_LISTENER(...)   XY_IMPL(__VA_ARGS__)
+#define __XY_HOOK_DISPATCH(...) __XY_DISPATCH(__VA_ARGS__)
+#endif
+
+/**
+ * @brief Declare a hook that can be called like a normal function.
+ *
+ * This is the preferred declaration form for call sites that should read as
+ * ordinary C. The generated inline function still routes through XY_CALL, so
+ * the current execution region is preserved.
+ *
+ * Do not use this macro in the same translation unit that defines a listener
+ * for the same hook name with XY_IMPL; the listener should keep using
+ * XY_IMPL and dispatch recursively with XY_CALL when needed.
+ */
+#define XY_DECL(ftype, fname, ...) \
+	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wpedantic\"") \
+	struct fname##_args { \
+		XY_PG(__VA_ARGS__) \
+	}; \
+	_Pragma("GCC diagnostic pop") \
+	static xy_adapter_t __xy_decl_##fname##_adapter = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_args), \
+		.ret_size = sizeof(ftype), \
+		.hook_id = -1, \
+	}; \
+	static inline UNUSED \
+	ftype fname(XY_FA(__VA_ARGS__)) { \
+		ftype ret; \
+		struct fname##_args args = { XY_DA(__VA_ARGS__) }; \
+		__XY_DISPATCH(&ret, &__xy_decl_##fname##_adapter, &args); \
+		return ret; \
+	} \
+	typedef int __xy_decl_##fname##_semicolon_eater_t
+
+/**
+ * @brief Define the canonical adapter for a normal-function hook.
+ *
+ * Use XY_DECL in shared headers; use XY_DEF in the one
+ * translation unit that emits the canonical adapter. XY_DEF is
+ * self-sufficient in definition TUs and also provides the ordinary call
+ * syntax there.
+ */
+#define XY_DEF(ftype, fname, ...) \
+	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wpedantic\"") \
+	struct fname##_args { \
+		XY_PG(__VA_ARGS__) \
+	}; \
+	_Pragma("GCC diagnostic pop") \
+	static xy_adapter_t __xy_decl_##fname##_adapter = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_args), \
+		.ret_size = sizeof(ftype), \
+		.hook_id = -1, \
+	}; \
+	static inline UNUSED \
+	ftype fname(XY_FA(__VA_ARGS__)) { \
+		ftype ret; \
+		struct fname##_args args = { XY_DA(__VA_ARGS__) }; \
+		__XY_DISPATCH(&ret, &__xy_decl_##fname##_adapter, &args); \
+		return ret; \
+	} \
+	_Static_assert(sizeof(ftype) <= XY_MAX_RET_SIZE, \
+		"return type too large for xy_adapter_t"); \
+	void fname##_adapter_call(void *res, void *fn, void *arg) { \
+		fname##_t *cast_fn; \
+		if (!fn) { \
+			if (res) memset(res, 0, sizeof(ftype)); \
+			WARN("%s_adapter_call: '%s' wasn't defined\n", \
+				XSTR(fname), XSTR(fname)); \
+			return; \
+		} \
+		* (void **) &cast_fn = fn; \
+		struct fname##_args *__xy_a = arg; (void)__xy_a; \
+		ftype result = cast_fn(XY_NP(__VA_ARGS__)); \
+		if (res) *(ftype *)res = result; \
+	} \
+	xy_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_args), \
+		.ret_size = sizeof(ftype), \
+		.call = &fname##_adapter_call, \
+		.hook_id = -1, \
+	}; \
+	void fname##_adapter_reg(void) { \
+		xy_areg(XSTR(fname), &fname##_adapter); \
+	} \
+	AUTO_INIT \
+	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg
+
+/**
+ * @brief Define a module listener implementation for a hook.
+ *
+ * Use this in modules that implement hooks. The host dispatches to these
+ * listener functions when the matching hook is called.
+ *
+ * Creates:
+ * - \c fname##_t: Function typedef
+ * - \c fname: Function implementation (you provide this)
+ * - \c fname##_id: Hook ID (set on registration)
+ *
+ * The hook is auto-registered when the module loads.
+ *
+ * @param ftype Return type (e.g., int, void)
+ * @param fname Function name (e.g., on_tick)
+ * @param ... Argument types and names (e.g., int, dt)
+ *
+ * Example:
+ * @code
+ * XY_IMPL(int, on_tick, int, dt);
+ * int on_tick(int dt) { return dt + 1; }
+ * @endcode
+ */
+#define XY_IMPL(ftype, fname, ...) \
+	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
+	fname##_t fname; \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wpedantic\"") \
+	struct fname##_args { \
+		XY_PG(__VA_ARGS__) \
+	}; \
+	_Pragma("GCC diagnostic pop") \
+	extern xy_adapter_t fname##_adapter; \
+	_Static_assert(sizeof(ftype) <= XY_MAX_RET_SIZE, \
+		"return type too large for xy_adapter_t"); \
+	fname##_t fname; \
+	void fname##_adapter_call(void *res, void *fn, void *arg) { \
+	fname##_t *cast_fn; \
+	if (!fn) { \
+		fn = (void *)(uintptr_t)&fname; \
+	} \
+	if (!fn) { \
+		if (res) memset(res, 0, sizeof(ftype)); \
+		WARN("%s_adapter_call: '%s' wasn't defined\n", \
+				XSTR(fname), XSTR(fname)); \
+		return; \
+	} \
+	* (void **) &cast_fn = fn; \
+	struct fname##_args *__xy_a = arg; (void)__xy_a; \
+	ftype result = cast_fn(XY_NP(__VA_ARGS__)); \
+	if (res) *(ftype *)res = result; \
+	} \
+	xy_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_args), \
+		.ret_size = sizeof(ftype), \
+		.call = &fname##_adapter_call, \
+		.hook_id = -1, \
+	}; \
+	void fname##_adapter_reg(void) { \
+		xy_areg(XSTR(fname), &fname##_adapter); \
+	} \
+	AUTO_INIT \
+	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg; \
+	ftype fname(XY_FA(__VA_ARGS__))
+
+/**
+ * @brief Define a tagged module listener implementation for a hook.
+ *
+ * Emits static functions and adapters tagged with @p tag so that multiple
+ * listeners for the same hook can be compiled into the same library or WASM
+ * reactor without linker symbol collisions.
+ */
+#define XY_LISTENER_TAG(ftype, fname, tag, ...) \
+	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
+	static ftype fname##_##tag(XY_FA(__VA_ARGS__)); \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wpedantic\"") \
+	struct fname##_##tag##_args { \
+		XY_PG(__VA_ARGS__) \
+	}; \
+	_Pragma("GCC diagnostic pop") \
+	static void fname##_##tag##_adapter_call(void *res, void *fn, void *arg) { \
+		fname##_t *cast_fn; \
+		if (!fn) { \
+			fn = (void *)(uintptr_t)&fname##_##tag; \
+		} \
+		if (!fn) { \
+			if (res) memset(res, 0, sizeof(ftype)); \
+			return; \
+		} \
+		* (void **) &cast_fn = fn; \
+		struct fname##_##tag##_args *__xy_a = arg; (void)__xy_a; \
+		ftype result = cast_fn(XY_NP(__VA_ARGS__)); \
+		if (res) *(ftype *)res = result; \
+	} \
+	static xy_adapter_t fname##_##tag##_adapter = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_##tag##_args), \
+		.ret_size = sizeof(ftype), \
+		.call = &fname##_##tag##_adapter_call, \
+		.hook_id = -1, \
+	}; \
+	static void fname##_##tag##_adapter_reg(void) { \
+		xy_areg(XSTR(fname), &fname##_##tag##_adapter); \
+	} \
+	AUTO_INIT \
+	void (*fname##_##tag##_adapter_reg_p)(void) = fname##_##tag##_adapter_reg; \
+	static ftype fname##_##tag(XY_FA(__VA_ARGS__))
+
+/**
+ * @brief Call a mod hook by name within the current thread-local region.
+ *
+ * This macro calls all modules that implement the named hook whose region
+ * is a descendant-or-equal of the caller's current region.
+ * The return value is from the last module that ran.
+ *
+ * @param retp Pointer to store return value
+ * @param fname Hook function name
+ * @param ... Arguments to pass to the hook
+ *
+ * Example:
+ * @code
+ * int result;
+ * XY_CALL(&result, on_tick, 16);
+ * @endcode
+ */
+/* the caller uses this to call */
+#define XY_CALL(retp, fname, ...) { \
+	struct fname##_args args = { __VA_ARGS__ }; \
+	xy_call(retp, &fname##_adapter, &args); \
+}
+
+/* Internal types - used by xy_t struct */
+typedef unsigned xy_areg_t(char *name, xy_adapter_t *adapter);
+typedef int xy_call_t(void *retp, xy_adapter_t *adapter, void *args);
+typedef int xy_last_t(void *ret);
+
+/* -------------------------------------------------------------------------
+ * Region API types
+ * ------------------------------------------------------------------------- */
+
+/** Root region — ancestor of all regions.  Passing this to xy_call
+ *  dispatches to every module regardless of its region. */
+#define XY_REGION_ROOT ((uint64_t)0)
+
+/** Sentinel returned when region allocation fails. */
+#define XY_REGION_INVALID ((uint64_t)-1)
+
+/**
+ * @brief Deny target (hook name or module path) selector.
+ */
+typedef enum {
+	XY_DENY_HOOK   = 0, /**< @p what is a hook name */
+	XY_DENY_MODULE = 1, /**< @p what is a module path */
+} xy_deny_type_t;
+
+/**
+ * @brief Deny a hook or module within the caller's current region.
+ *
+ * The deny applies to sub-regions only (children-only semantics by default).
+ * A module's own region is never blocked by its own deny.
+ *
+ * @param what  Hook name (XY_DENY_HOOK) or module path (XY_DENY_MODULE).
+ * @param type  XY_DENY_HOOK or XY_DENY_MODULE.
+ * @return XY_OK or a negative XY_ERR_* code.
+ */
+typedef int xy_deny_t(const char *what, xy_deny_type_t type);
+
+/**
+ * @brief Claim handler type.
+ *
+ * @param module_path    Path of the child module making the request (read-only)
+ * @param requested_bits Number of bits the child asked for
+ * @param granted_bits   Out-param: set to the approved width
+ * @param ud             User data from xy_require_claim()
+ * @return XY_OK to approve (with *granted_bits set), XY_ERR_EPERM to reject.
+ */
+typedef int xy_claim_handler_fn_t(const char *module_path,
+                                    uint8_t     requested_bits,
+                                    uint8_t    *granted_bits,
+                                    void       *ud);
+
+/**
+ * @brief Set or clear the claim gate on the caller's current region.
+ *
+ * When @p fn is non-NULL, the gate is opened: all subsequent xy_load() calls
+ * into this region require the module to export a `XY_MODULE_API uint8_t xy_claim`
+ * data symbol.  If the symbol is absent, xy_load() returns XY_ERR_EPERM and
+ * xy_install() never runs.  If the symbol is present, the host performs the
+ * claim on behalf of the module by invoking @p fn before running xy_install().
+ *
+ * Modules loaded *before* this call in the same xy_install() context are
+ * unaffected — they load flat into the current region as normal.
+ *
+ * When @p fn is NULL, the gate is cleared: subsequent xy_load() calls no
+ * longer require an xy_claim symbol.  A later non-NULL call re-enables the
+ * gate.
+ *
+ * @param fn  Claim handler function, or NULL to clear the claim gate.
+ * @param ud  User data passed to fn (ignored when fn is NULL).
+ * @return XY_OK or negative XY_ERR_* code.
+ */
+typedef int xy_require_claim_t(xy_claim_handler_fn_t *fn, void *ud);
+
+/**
+ * @brief Region identity.
+ *
+ * A region is identified by the pair @p (id, plen) — never by @p id alone.
+ * @p id is an opaque uint64_t prefix value and @p plen is that prefix's
+ * length in bits (0 for the root region).  Two regions may legitimately
+ * share an @p id and differ only in @p plen — e.g. the root @p (0,0) and a
+ * child granted its leftmost bits @p (0,16) — so any API that must name a
+ * region unambiguously takes both halves.
+ *
+ * This struct is packed, and that is load-bearing rather than cosmetic: it
+ * serves as a fixed-width corm key compared bytewise, so any padding would be
+ * uninitialised bytes that differ between the storing and the looking-up call
+ * and would silently make lookups miss.  sizeof must be exactly 9.
+ */
+typedef struct __attribute__((packed)) xy_region_key {
+	uint64_t id;
+	uint8_t  plen;
+} xy_region_key_t;
+
+/**
+ * @brief Enumerate immediate child regions of the caller's current region.
+ *
+ * Calls @p fn(child_id, plen, ud) for each child in allocation order.
+ * @p child_id is an opaque uint64_t region identifier and @p plen is that
+ * child's prefix length in bits; together they are the child's identity.
+ *
+ * Return XY_OK from @p fn to continue, any other value to stop.
+ * xy_region_each returns the last value returned by @p fn, or XY_OK if
+ * there were no children.
+ */
+typedef int xy_region_each_fn_t(uint64_t child_id, uint8_t plen, void *ud);
+typedef int xy_region_each_t(xy_region_each_fn_t *fn, void *ud);
+
+/**
+ * @brief Run @p fn with the caller's current region temporarily set to
+ * the region identified by (@p region_id, @p plen).
+ *
+ * Nested hook calls inside @p fn inherit that region.  The previous region is
+ * always restored, including when @p fn fails.
+ *
+ * @return XY_ERR_NOTFOUND if no region with that exact (id, plen) exists —
+ *         an @p region_id that exists at some other width is a different
+ *         region and is likewise not found.
+ */
+typedef int xy_with_region_t(uint64_t region_id, uint8_t plen,
+                             xy_scope_fn_t *fn, void *ud);
+
+/**
+ * @brief Return the id half of the caller's current region identity.
+ *
+ * This is the id only.  It does not name a region uniquely; pair it with
+ * xy_current_region_plen() to obtain a full identity.
+ */
+typedef uint64_t xy_current_region_t(void);
+
+/**
+ * @brief Return the plen half of the caller's current region identity.
+ *
+ * Reads the thread-local region entry directly — no lookup, and no ambiguity,
+ * because the current region is already resolved.  For any region other than
+ * the current one, use xy_region_exists() to test an exact (id, plen).
+ *
+ * @return Prefix length in bits; 0 for the root region.
+ */
+typedef uint8_t xy_current_region_plen_t(void);
+
+/**
+ * @brief Test whether the region identified by (@p region_id, @p plen)
+ * exists and is addressable.
+ *
+ * @return XY_OK if that exact region exists, XY_ERR_NOTFOUND otherwise.
+ *         Both halves are required: an @p region_id that exists at a
+ *         different width is a different region.
+ */
+typedef int xy_region_exists_t(uint64_t region_id, uint8_t plen);
+
+/**
+ * @brief Create the region identified by (@p id, @p plen), or reuse it.
+ *
+ * The engine-facing creation primitive: it names the region outright instead
+ * of waiting for a module to claim bits, so a region can exist before any
+ * module is loaded into it (Phase 3's st_open) and be rebuilt at boot from
+ * persisted state (Phase 2's restore).
+ *
+ * @p id is an opaque prefix value whose prefix lives in the HIGH bits above
+ * @p plen — the same shape region_alloc_slot() produces for a claim-gated
+ * child.  So @p 2<<48 at @p plen 16 is a canonical, fully aligned id; a value
+ * with any bit set below the prefix width is not, and is rejected.  @p id is
+ * never inspected to infer a width: CP-3 established that four regions share
+ * @p id 0, so a "lowest set bit implies the width" shortcut is exactly the bug
+ * this API exists to avoid.  Pass the width.
+ *
+ * The new region is attached to the *nearest existing ancestor* — the region
+ * of the largest width below @p plen that prefix-covers (@p id, @p plen), the
+ * root always qualifying.  No intermediate ancestors are invented, so a
+ * multi-bit jump is legal and cheap: claiming (0,64) straight from the root
+ * creates one region, not four.
+ *
+ * Rejections:
+ * - @p plen > 64 -> XY_ERR_TOOBIG
+ * - (@p id & high-bit-mask(@p plen)) != @p id -> XY_ERR_INVALID (misaligned)
+ * - @p plen <= its nearest covering ancestor's width -> XY_ERR_INVALID
+ *
+ * Note what that last rule does *not* say: a same-id child is legal.  Claiming
+ * (0,16) under the root (0,0) widens the region, so it is accepted — and it has
+ * to be, since (0,0) and (0,16) sharing an id is exactly what CP-3 introduced.
+ * The rejection is about *width*, never about @p id equalling the ancestor's.
+ *
+ * An exact (@p id, @p plen) match is idempotent: it succeeds, becomes the
+ * caller's current region, and — like the creation path — installs @p fn as the
+ * region's claim handler when @p fn is non-NULL.  A later claim therefore
+ * reconfigures an existing region rather than silently ignoring the handler.
+ *
+ * @param fn  Claim handler to install on the region, or NULL for none.
+ * @param ud  User data for @p fn.
+ * @return XY_OK on creation or reuse; negative XY_ERR_* on rejection.
+ *         On success the region is the caller's current region, so a following
+ *         xy_load() lands inside it.
+ */
+typedef int xy_claim_at_t(uint64_t id, uint8_t plen,
+                          xy_claim_handler_fn_t *fn, void *ud);
+
+/**
+ * @brief Find the deepest existing region whose prefix covers a point.
+ *
+ * The engine's "which region is this point in?" primitive: given a prefix
+ * value, return the most specific region that contains it, so a caller walking
+ * the tree coarse-to-fine can tell an exact hit from an ancestor fallback.
+ *
+ * A region (A, plen_A) covers (@p prefix_id, @p plen) when @p plen_A <= @p plen
+ * and masking @p prefix_id to @p plen_A yields @p A.  The root covers every
+ * point, so the only way to miss is a @p plen that no region reaches.
+ *
+ * @param prefix_id   The point to locate.
+ * @param plen        That point's prefix width in bits.
+ * @param region_plen Out-param: the covering region's width.  Set to 0 on every
+ *                    failure path, so it is always defined.  May be NULL.
+ * @return The covering region's id half, or XY_REGION_INVALID if none.  The id
+ *         alone does not name a region — (0,0) and (0,16) share it — so pass
+ *         the returned width to xy_with_region() to dispatch there.
+ */
+typedef uint64_t xy_region_at_t(uint64_t prefix_id, uint8_t plen,
+                                uint8_t *region_plen);
+
+/**
+ * @brief Dispatch to the caller's current region's own modules only.
+ *
+ * The exact-region counterpart of xy_call().  xy_call() reaches the current
+ * region's whole subtree; this reaches only the modules loaded directly into
+ * the current region — no descendant region, and no ancestor.
+ *
+ * It exists so an ancestor walk gives each region one observable turn instead of
+ * re-running every level's entire subtree once per step.  Deny checks and
+ * xy_last() predecessor semantics are identical to xy_call()'s: a listener
+ * still sees its predecessor's return value, and a deny from any ancestor still
+ * refuses the whole dispatch with XY_ERR_EPERM.
+ *
+ * @param retp     Out-param for the last listener's return value.
+ * @param adapter  The hook adapter.
+ * @param args     Hook arguments.
+ * @return XY_OK, XY_ERR_NOTFOUND if no listener in this exact region ran
+ *         (an empty dispatch, which is not the same as a listener returning
+ *         zero — read xy_errno() to tell them apart), or another XY_ERR_*.
+ */
+typedef int xy_call_self_t(void *retp, xy_adapter_t *adapter, void *args);
+
+xy_areg_t   xy_areg;
+xy_call_t   xy_call;
+xy_last_t   xy_last;
+xy_deny_t           xy_deny;
+xy_require_claim_t  xy_require_claim;
+xy_region_each_t    xy_region_each;
+xy_with_region_t    xy_with_region;
+xy_current_region_t xy_current_region;
+xy_current_region_plen_t xy_current_region_plen;
+xy_region_exists_t  xy_region_exists;
+xy_claim_at_t       xy_claim_at;
+xy_region_at_t      xy_region_at;
+xy_call_self_t      xy_call_self;
+
+/**
+ * @brief Load or reload a module into the caller's current region.
+ *
+ * @param fname     Path to .so (Linux) or .dll (Windows) file
+ * @return XY_OK on success, negative error code on failure
+ *
+ * On first load, calls xy_install().
+ * Subsequent loads of the same path into the same region are no-ops.
+ */
+typedef int xy_load_t(char *fname);
+xy_load_t xy_load;
+
+#ifdef __wasm__
+/**
+ * @brief Host import for browser WASM dynamic module streaming and instantiation.
+ */
+__attribute__((import_module("xylem"), import_name("wasm_xy_load_module")))
+int wasm_xy_load_module(const char *name, size_t name_len);
+
+__attribute__((import_module("xylem"), import_name("wasm_xy_unload_module")))
+int wasm_xy_unload_module(const char *name, size_t name_len);
+#endif
+
+/**
+ * @brief Unload a previously loaded module from the caller's current region.
+ *
+ * Decrements the module's reference count.  When the count reaches zero:
+ *  - Calls the module's xy_uninstall() export (if present); if it returns
+ *    non-zero the unload is aborted and XY_ERR_EPERM is returned.
+ *  - Recursively unloads child modules whose reference count would reach zero.
+ *  - Removes deny entries registered by the module.
+ *  - Invalidates cached function pointers across all other modules.
+ *  - Calls dlclose() and frees internal bookkeeping.
+ *
+ * @param fname  Path that was passed to xy_load() (without .so/.dll suffix)
+ * @return XY_OK on success, XY_ERR_NOTFOUND if not loaded, XY_ERR_EPERM if
+ *         xy_uninstall() vetoed the unload.
+ */
+typedef int xy_unload_t(char *fname);
+xy_unload_t xy_unload;
+
+/**
+ * @brief Reload a module in place, preserving its dispatch position.
+ *
+ * Equivalent to xy_unload() followed by xy_load() in the same region, but
+ * the reloaded module is re-inserted at its original position in the dispatch
+ * order rather than appended at the tail.
+ *
+ * If xy_uninstall() vetoes the unload the reload is aborted.
+ *
+ * @param fname  Path that was passed to xy_load() (without .so/.dll suffix)
+ * @return XY_OK on success, negative XY_ERR_* on failure.
+ */
+typedef int xy_reload_t(char *fname);
+xy_reload_t xy_reload;
+
+/**
+ * @brief Shutdown and unload all modules.
+ *
+ * Calls dlclose() on all loaded module handles.
+ * After this, xy_load() can be called again.
+ */
+typedef void xy_shutdown_t(void);
+xy_shutdown_t xy_shutdown;
+
+/**
+ * @brief Get last error code.
+ *
+ * @return Last error code from failed API call
+ *
+ * Most API functions set this on failure.
+ */
+typedef int xy_errno_t(void);
+xy_errno_t xy_errno;
+
+/**
+ * @brief Get human-readable error message.
+ *
+ * @param err Error code (e.g., from xy_errno())
+ * @return Static string describing the error
+ */
+typedef const char *xy_strerror_t(int err);
+xy_strerror_t xy_strerror;
+
+void xy_init(void);
+
+/**
+ * @name Context ABI tripwire
+ *
+ * The host fills a module-local @ref xy_ctx by writing
+ * `sizeof(struct xy_ctx)` bytes into it, using the size *the host* was
+ * compiled with.  If the module was built against a different header its
+ * object may be smaller, and the tail of that write lands in whatever follows
+ * it in the module's BSS.  This is invisible at the source level — a stale
+ * module still loads, still returns XY_OK, and still has working function
+ * pointers for every field both versions share — so the only symptom is
+ * corruption of an unrelated library, some distance away.
+ *
+ * Two mechanisms prevent that, and both must be used:
+ *
+ * 1. @ref XY_CTX_SIZE is a hard `_Static_assert` on this struct.  Adding or
+ *    removing a field fails the build of *everything* that includes this
+ *    header, host and module alike, until the constant is deliberately
+ *    bumped.  That makes a layout change impossible to ship silently.
+ * 2. @ref XY_CTX_ABI_VER is exchanged at load time.  A module must export
+ *    `xy_ctx_abi()` (xy-mod.h emits it automatically); if the descriptor does
+ *    not match the host's exactly, the load is refused with @ref XY_ERR_ABI.
+ *    This catches the case (1) cannot: a module compiled earlier against an
+ *    older header and still sitting on disk.
+ *
+ * Note that (1) alone is not enough, because `external/axil-*` modules build
+ * against the *system-installed* header tree rather than this submodule, so a
+ * site `make` does not rebuild them.
+ * @{
+ */
+
+/** @brief ABI generation of @ref xy_ctx.  Bump on every layout change. */
+#define XY_CTX_ABI_VER   3
+
+/** @brief `sizeof(struct xy_ctx)` as asserted by this header. */
+#if defined(__ILP32__) || defined(__wasm32__) || defined(__wasm__)
+#define XY_CTX_SIZE      104
+#else
+#define XY_CTX_SIZE      184
+#endif
+
+/**
+ * @brief The value a module must export from `xy_ctx_abi()`.
+ *
+ * Packs the ABI generation in the high 32 bits and the context size in the low
+ * 32, so one exported function carries the whole contract and the host can
+ * decode it for an actionable error message.
+ */
+#define XY_CTX_ABI_DESC  (((uint64_t)(XY_CTX_ABI_VER) << 32) | (uint32_t)(XY_CTX_SIZE))
+/** @} */
+
+struct xy_ctx {
+	xy_call_t       *call;
+	xy_areg_t       *areg;
+	xy_load_t       *load;
+	xy_errno_t      *err;
+	xy_strerror_t   *strerror;
+	xy_adapter_t    *adapter;
+	xy_last_t       *last;
+	xy_shutdown_t   *shutdown;
+	/** @brief Path this module was loaded from; set by host, read-only to module */
+	const char       *module_path;
+	/** @brief Region ID assigned to this module at load time */
+	uint64_t          region_id;
+	/* region management API */
+	xy_deny_t            *deny;
+	xy_require_claim_t   *require_claim;
+	xy_region_each_t     *region_each;
+	xy_with_region_t     *with_region;
+	xy_current_region_t  *current_region;
+	xy_current_region_plen_t *current_region_plen;
+	xy_region_exists_t   *region_exists;
+	xy_claim_at_t        *claim_at;
+	xy_region_at_t       *region_at;
+	xy_call_self_t       *call_self;
+	/* unload / reload */
+	xy_unload_t          *unload;
+	xy_reload_t          *reload;
+	/** @brief Per-region module state pointer; set by framework before each
+	 *  hook dispatch.  NULL if the module did not export xy_region_state_size. */
+	void                  *region_state;
+};
+
+/* The tripwire.  A layout change must not be shippable without a deliberate
+ * bump — see @ref XY_CTX_ABI_VER. */
+_Static_assert(sizeof(struct xy_ctx) == XY_CTX_SIZE,
+	"struct xy_ctx layout changed: bump XY_CTX_ABI_VER and XY_CTX_SIZE in "
+	"xy.h, then rebuild every module (stale ones are refused at load)");
+
+/**
+ * @brief Register a module's xy context from a .init_array constructor.
+ *
+ * Rust cdylibs call this from a .init_array constructor (generated by
+ * xy_module!()) to push their xy context pointer to the loader before
+ * mod_load_bind_xy runs.  The loader uses it as a fallback when
+ * get_xy_ptr lookup fails or returns an unexpected result.
+ *
+ * @param ctx  Pointer to the module-local XyCtx static.
+ */
+void xy_self_init_ctx(struct xy_ctx *ctx);
+
+/**
+ * @brief Report this module's xy_ctx ABI generation and size.
+ *
+ * A module **must** export this symbol with exactly this signature, returning
+ * @ref XY_CTX_ABI_DESC.  `xy-mod.h` emits it automatically for C modules and
+ * `xy_module!()` does so for Rust modules; a hand-written module that only
+ * exports `get_xy_ptr` must add it by hand.
+ *
+ * The host compares the returned descriptor against its own before writing
+ * anything into the module's context.  A module built against a different
+ * header has an object of a different size, and the host's write would
+ * overrun it — corrupting unrelated data in the module's BSS rather than
+ * failing.  A module that does not export this symbol at all is refused the
+ * same way, because an unversioned module cannot be proven safe.
+ *
+ * Only modules that actually *have* a context need this.  A module that
+ * exports neither `get_xy_ptr` nor a `xy_self_init_ctx` call has nothing for
+ * the host to write into, so there is nothing to overrun and nothing to
+ * declare; bootstrap modules like the site's `core` are in that class and load
+ * unchanged.
+ *
+ * @return @ref XY_CTX_ABI_DESC as compiled into the calling module.
+ */
+uint64_t xy_ctx_abi(void);
+
+#endif
