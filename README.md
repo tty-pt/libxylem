@@ -4,7 +4,7 @@
 
 # libxylem
 
-[![npm](https://img.shields.io/badge/npm-@ttypt/xylem-CB3837?logo=npm)](npm/README.md)
+[![npm](https://img.shields.io/badge/npm-@tty-pt/xylem-CB3837?logo=npm)](npm/README.md)
 [![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
 [![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![Hook modules](https://img.shields.io/badge/hook-modules-4B8BBE)](#)
@@ -103,11 +103,11 @@ sudo make install     # install headers and library to system
 
 ---
 
-## 6. JavaScript & WebAssembly Bindings (@ttypt/xylem)
+## 6. JavaScript & WebAssembly Bindings (@tty-pt/xylem)
 
 Official Node.js and Browser WebAssembly bindings are colocated in [`npm/`](npm/README.md):
 - **Universal Engine**: Extensible event and hook bus (`XylemBus`, `areg`, `call`) mirroring C dynamic module contracts.
-- **C Development Headers**: Install via `npm install @ttypt/xylem` and consume headers from `node_modules/@ttypt/xylem/include`.
+- **C Development Headers**: Install via `npm install @tty-pt/xylem` and consume headers from `node_modules/@tty-pt/xylem/include`.
 
 👉 *For complete TypeScript usage, hook guides, and API reference, see [npm/README.md](npm/README.md).*
 

@@ -319,7 +319,7 @@ variable, `nm -D` cannot tell you a module's generation — it prints the symbol
 address, which says nothing about the value. To audit real binaries, call it:
 
 ```c
-/* preloaded RTLD_GLOBAL, since modules leave xy_*/qsyslog to the host */
+/* preloaded RTLD_GLOBAL, since modules leave xy_*/stllog to the host */
 uint64_t (*abi)(void) = dlsym(dlopen(path, RTLD_NOW), "xy_ctx_abi");
 uint64_t d = abi();                       /* (ver << 32) | size */
 ```

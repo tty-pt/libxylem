@@ -50,7 +50,7 @@
 #include <string.h>
 #include <ttypt/xy-pp.h>
 #ifndef __wasm__
-#include <ttypt/qsys.h>
+#include <ttypt/stele.h>
 #else
 #ifndef WARN
 #define WARN(...) ((void)0)

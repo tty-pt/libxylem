@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tty-pt/libxylem/main/assets/logo.png" alt="@ttypt/xylem logo" width="220" />
+  <img src="https://raw.githubusercontent.com/tty-pt/libxylem/main/assets/logo.png" alt="@tty-pt/xylem logo" width="220" />
 </p>
 
-# @ttypt/xylem
+# @tty-pt/xylem
 
-[![npm version](https://img.shields.io/badge/npm-v0.1.0-CB3837?logo=npm)](#)
+[![npm version](https://img.shields.io/badge/npm-v1.7.2-CB3837?logo=npm)](#)
 [![License: BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![TypeScript Ready](https://img.shields.io/badge/TypeScript-Ready-3178C6?logo=typescript)](#)
 [![Node.js Native](https://img.shields.io/badge/Node.js-N--API-339933?logo=node.js)](#)
@@ -18,11 +18,11 @@
 ## 1. Quickstart
 
 ```bash
-npm install @ttypt/xylem
+npm install @tty-pt/xylem
 ```
 
 ```typescript
-import { XylemBus, areg, call } from "@ttypt/xylem";
+import { XylemBus, areg, call } from "@tty-pt/xylem";
 
 // 1. Register a dynamic hook listener
 const unregister = areg("on_event", (payload) => {
@@ -39,10 +39,29 @@ unregister();
 
 ---
 
-## 2. C Development Headers via NPM
+## 2. JavaScript / TypeScript API Reference
+
+### `XylemBus`
+Dynamic module hook and lifecycle event bus.
+* `constructor()`: Initializes an isolated event bus.
+* `.register(name: string, listener: Function): () => boolean`: Registers hook and returns unsubscribe function. Automatically registers into compiled `xylem.wasm` via `xy_areg()`.
+* `.call(name: string, ...args: any[]): any[]`: Dispatches hook sequentially, collecting return values.
+* `.has(name: string): boolean`: Checks if any listeners are registered for hook.
+* `.unregister(name: string, listener: Function): boolean`: Unregisters specific listener.
+* `.list(): string[]`: Lists all registered hook names.
+
+### Standalone Functions
+* `areg(name: string, listener: Function): () => boolean`: Registers listener on the global default bus.
+* `call(name: string, ...args: any[]): any[]`: Dispatches hook on the global default bus.
+* `getXylemWasm(): WebAssembly.Instance`: Returns the WebAssembly instance loaded on the Stele shared-memory substrate.
+* `version(): string`: Returns the library semantic version string.
+
+---
+
+## 3. C Development Headers via NPM
 
 ```makefile
-CFLAGS += -I./node_modules/@ttypt/xylem/include
+CFLAGS += -I./node_modules/@tty-pt/xylem/include
 LDLIBS += -lxylem
 ```
 

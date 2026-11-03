@@ -10,7 +10,7 @@
 #ifndef _WIN32
 #include <dlfcn.h>	/* dladdr/Dl_info only — address→module introspection,
 			 * distinct from the dlopen/dlsym/dlclose/dlerror quad
-			 * that now goes through libqsys's portable wrappers. */
+			 * that now goes through libstele's portable wrappers. */
 /* <link.h> and dlinfo()/RTLD_DI_LINKMAP exist only on the ELF/BSD linkers.
  * macOS has no <link.h> and its dlfcn.h declares neither dlinfo() nor
  * RTLD_DI_LINKMAP; OpenBSD has no <link.h> either.  Both still give us
@@ -113,7 +113,7 @@ corm_ptr(const void *value)
 void *
 module_lookup_symbol_raw(void *handle, const char *symbol)
 {
-	return qsys_dlsym(handle, symbol);
+	return stl_dlsym(handle, symbol);
 }
 
 int
@@ -489,7 +489,7 @@ module_load_path(const char *fname)
 		return NULL;
 	memcpy(buf, fname, flen);
 	memcpy(buf + flen, ext, elen + 1);
-	char *resolved = qsys_realpath(buf, NULL);
+	char *resolved = stl_realpath(buf, NULL);
 	if (resolved) {
 		free(buf);
 		return resolved;
@@ -564,7 +564,7 @@ module_search_path_list(const char *list, const char *leaf, size_t leaflen)
 			memcpy(cand, p, dlen);
 			cand[dlen] = '/';
 			memcpy(cand + dlen + 1, leaf, leaflen);
-			resolved = qsys_realpath(cand, NULL);
+			resolved = stl_realpath(cand, NULL);
 			free(cand);
 			if (resolved)
 				return resolved;
@@ -943,7 +943,7 @@ module_free_entry(xy_mod_entry_t *entry, int close_handle)
 	free(entry);
 
 	if (close_handle && handle)
-		qsys_dlclose(handle);
+		stl_dlclose(handle);
 	if (tmp) {
 		unlink(tmp);
 		free(tmp);
@@ -1012,7 +1012,7 @@ mod_load_abort(xy_load_txn_t *tx, int err)
 	}
 	module_lookup_result_free(&tx->lookup);
 	if (tx->handle) {
-		qsys_dlclose(tx->handle);
+		stl_dlclose(tx->handle);
 		tx->handle = NULL;
 	}
 	return err;
@@ -1029,7 +1029,7 @@ copy_one(const char *src, const char *tmpl_in, char **out_tmp)
 	if (strlen(tmpl_in) >= sizeof(tmpl))
 		return -1;
 	strcpy(tmpl, tmpl_in);
-	out_fd = qsys_mkstemps(tmpl, 3);
+	out_fd = stl_mkstemps(tmpl, 3);
 	if (out_fd < 0)
 		return -1;
 	in_fd = open(src, O_RDONLY | O_BINARY);
@@ -1056,7 +1056,7 @@ copy_one(const char *src, const char *tmpl_in, char **out_tmp)
 	if (fchmod(out_fd, 0755) != 0)
 		goto out;
 #endif
-	if (qsys_fsync(out_fd) != 0)
+	if (stl_fsync(out_fd) != 0)
 		goto out;
 #ifndef _WIN32
 	{
@@ -1123,10 +1123,10 @@ mod_load_open_handle(xy_load_txn_t *tx, char *fname)
 		return XY_ERR_INVALID;
 
 	if (xy_reloading && copy_to_tmp(tx->lookup.load_path, &tmp) == 0) {
-		tx->handle = qsys_dlopen(tmp, QSYS_RTLD_NODELETE);
+		tx->handle = stl_dlopen(tmp, STL_RTLD_NODELETE);
 		if (!tx->handle) {
 			WARN("_mod_load failed loading '%s' (tmp %s): %s\n",
-			     fname, tmp, qsys_dlerror());
+			     fname, tmp, stl_dlerror());
 			unlink(tmp);
 			free(tmp);
 			module_lookup_result_free(&tx->lookup);
@@ -1134,9 +1134,9 @@ mod_load_open_handle(xy_load_txn_t *tx, char *fname)
 		}
 		tx->tmp_load_path = tmp;
 	} else {
-		tx->handle = qsys_dlopen(tx->lookup.load_path, QSYS_RTLD_NODELETE);
+		tx->handle = stl_dlopen(tx->lookup.load_path, STL_RTLD_NODELETE);
 		if (!tx->handle) {
-			WARN("_mod_load failed loading '%s': %s\n", fname, qsys_dlerror());
+			WARN("_mod_load failed loading '%s': %s\n", fname, stl_dlerror());
 			module_lookup_result_free(&tx->lookup);
 			return XY_ERR_NOTFOUND;
 		}
@@ -1153,7 +1153,7 @@ mod_load_try_reuse_existing(xy_load_txn_t *tx)
 		return 0;
 
 	existing->refcount++;
-	qsys_dlclose(tx->handle);
+	stl_dlclose(tx->handle);
 	tx->handle = NULL;
 	if (tx->tmp_load_path) {
 		unlink(tx->tmp_load_path);

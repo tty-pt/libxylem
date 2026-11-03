@@ -1,9 +1,13 @@
-## [1.7.0]
+## [1.7.2] - 2026-11-03
 
-- **In-WASM Xylem Hook Dispatcher (`src/libxylem-wasm.c`, `include/ttypt/xy-mod.h`)**:
+- **In-WASM Xylem Hook Dispatcher & Substrate Integration (`src/libxylem-wasm.c`, `include/ttypt/xy-mod.h`)**:
   - Introduced lightweight in-WASM hook registry and dispatcher for isomorphic WebAssembly runtimes.
   - Supported `XY_DECL`, `XY_IMPL`, `XY_LISTENER_TAG`, `xy_call`, `xy_last`, and listener chaining inside WASM without host OS `dlopen`.
   - Exported dynamic host-bridge loader and canonical error reporting (`xy_strerror`, `xy_errno`).
+  - Linked `xylem.wasm` with `-Wl,--import-memory -Wl,--global-base=1048576` into Stele's unified linear memory.
+  - Standardized `loadNativeAddon` for internal `nativeBinding` initialization with pure WebAssembly fallback.
+  - Adopted strict `peerDependencies` (`@tty-pt/stele: ">=1.5.0"`) and `devDependencies` (`@tty-pt/stele: "^1.5.2"`).
+  - Migrated build to centralized `make wasm` in `external/mk/include.mk` with post-link `wasm-opt -O3` optimization (dropping binary size to 44 KB).
 
 ## [1.5.0]
 
@@ -168,56 +172,3 @@
   also fixed (two zero-listener dispatch assertions, one `xy_reload` assumption),
   and fixing the last of those unmasked two further wrong load-order assumptions
   in the cascade tests.
-
-## [1.4.2]
-
-- **Fix `xy.last()` inside dispatch handlers**: corrected mid-dispatch state tracking so `xy.last()` returns the predecessor module's result during a handler chain (restoring the expected composition semantics). Also publishes dispatch state via `xy_last_publish` after each call to prevent nested dispatches from leaking results into the outer chain.
-
-## [1.4.0]
-
-- **Renamed `libndx` → `libxylem`**: the `ndx_*` API and headers (`include/ttypt/ndx.h` → `xy.h`, `ndx-mod.h` → `xy-mod.h`, `ndx-pp.h` → `xy-pp.h`, `ndx-watch.h` → `xy-watch.h`; `ndx.pc` → `xylem.pc`). Region/pledge/intercept surface and the `XY_DECL`/`XY_DEF`/`XY_IMPL` module contract are unchanged, only the prefix.
-- **Faster `xy_call` dispatch**: hook-implementation check inlined, fast return-value copy, and a single-listener fast path.
-- **True in-place reload**: `xy_reload` re-inserts a module at its original dispatch position.
-- **Portable `dlopen`**: module loading goes through `qsys_dlopen` (`libqsys`) — POSIX on Unix, `LoadLibraryA` on Windows — trimming platform `#ifdef`s from the loader.
-- **Builds on macOS and OpenBSD**: the module-locality check (`module_symbol_is_local`) used `<link.h>` + `dlinfo(RTLD_DI_LINKMAP)`, which only exist on the ELF/BSD linkers — macOS ships neither and OpenBSD has no `link.h`, so both platforms failed to compile. The check now identifies a loaded object by base address where `dlinfo()` exists and falls back to file identity (`module_same_file`, string or `st_dev`/`st_ino`) elsewhere, so a reload's `.xylem-XXXXXX.so` copy and dyld's path canonicalisation (`/tmp` → `/private/tmp`, resolved symlinks) still compare as the same module. Also fixes the FreeBSD ≥ 13 base address compare, which used the `l_addr` load offset rather than `l_base`.
-- **Rust bindings** updated for the rename; audit/compliance cleanups and warning fixes.
-- `libqmap` → `libcorm` rename.
-
-## [1.1.2] - 2026-04-18
-- **Region system**: modules are now scoped to hierarchical regions. `xy_load()` places modules into the caller's current region; `XY_CALL` dispatches only to modules in the caller's region or its descendants. ~~Region IDs use prefix-encoded paths for O(1) ancestry checks.~~ *(Corrected in 1.5.0: ancestry is a `parent`-pointer walk, not a mask test, and an id is not a unique region name.)*
-- **`xy_claim(bits)`** (module export): a module declares how many sub-region bits it requests. The host evaluates it via the registered claim handler before running `xy_install()`.
-- **`xy_require_claim(fn, ud)`**: host enables a claim gate on the current region. Subsequent `xy_load()` calls require the module to export an `xy_claim` symbol; `fn` receives the request and approves or rejects it. Pass NULL to clear the gate.
-- **`xy_region_each(fn, ud)`**: enumerate immediate child regions of the caller's region; calls `fn(child_id, plen, ud)` for each, stops if `fn` returns non-zero. *(The `plen` argument was added in 1.5.0; see below.)*
-- **`xy_deny(what, type)`**: block a named hook (`XY_DENY_HOOK`) or module path (`XY_DENY_MODULE`) within the caller's region and all its descendants.
-- ~~**`xy_intercept(hook_name, fn, ud)`**~~ and ~~**`xy_pledge(hook_name)`**~~: **never implemented.** Both entries below 1.5.0 are aspirational and have no counterpart in `include/` or `src/` — `xy_intercept`, `xy_intercept_t`, `xy_interceptor_fn_t`, `xy_pledge` and `xy_pledge_t` have zero occurrences. The `xy_ctx` struct never reserved `pledge` or `intercept` slots either; `docs/api.md` and `README.md` listed them, which is where this entry's credibility came from, and both have been corrected in 1.5.0. Do not plan against either primitive.
-- **`xy_unload(fname)`**: unload a module from the caller's region. Calls `xy_uninstall()` (veto-able), recursively unloads zero-refcount children, removes deny entries, and invalidates cached function pointers across all modules. *(The `pledge`/`intercept` entry removal does not apply — see above.)*
-- **`xy_reload(fname)`**: unload then reload a module in place, re-inserting it at its original dispatch position rather than the tail.
-- **`xy_my_region()`**: return the region ID assigned to the calling module (diagnostic use).
-- **Per-region module state** (`XY_REGION_STATE` / `XY_REGION_INIT` / `XY_RS`): a module can declare a per-region state struct; the framework allocates one instance per region the module is loaded into and injects it via `xy.region_state` before each hook dispatch.
-- **Hot-path optimisations**: `xy_adapter_t` gains a `hook_id` field resolved lazily on first call, eliminating repeated hash-map lookups; `xy_call` accepts a `caller` parameter; region save/restore in the dispatch loop is skipped when the module's region matches the caller's. *(The TLS pledge write is absent along with pledges.)*
-- **Bugfixes**: guard against `WEAK` macro redefinition; fix `region_is_ancestor` depth check that allowed shallower nodes to falsely match as descendants; fix `__xy_caller_path__` redefinition when a TU includes both `xy.h` and `xy-mod.h`; composite `corm` key for `mod_hd` prevents collisions when the same `.so` is loaded into multiple regions.
-- Added `docs/api.md`. Removed Rust bindings scaffolding. Added comprehensive test suite.
-
-## [0.2.0] - 2026-02-22
-- Add comprehensive test suite with multiple test cases
-- Add Rust bindings scaffolding
-- Expand README with detailed library usage documentation
-- Add pre-commit git hooks
-- Normalize code indentation to tabs
-- Fix mingw section handling
-- Documentation improvements and consistency fixes
-
-## [0.1.2] - 2026-02-17
-- Expand README with usage and Windows notes
-- Fix adapter lookup in xy_call and safe xy_get
-- Add lazy init path for Windows
-- Make xy_load honor xy_open on reload
-- Update pkg-config metadata
-
-## [0.1.1] - 2025-10-24
-- Update to libcorm 0.5.0
-
-## [0.1.0] - 2025-10-19
-- Windows compatibility
-- Change release strategy
-- Headers in ttypt folder
