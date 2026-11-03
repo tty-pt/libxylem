@@ -1,3 +1,11 @@
+## [1.7.1] - 2026-11-03
+
+- **Standalone `@tty-pt/xylem` Package & Substrate Memory Integration**:
+  - Published `@tty-pt/xylem` on npm.
+  - Linked `xylem.wasm` with `-Wl,--import-memory -Wl,--global-base=1048576` into Stele's unified linear memory.
+  - Hook string allocation uses `@tty-pt/stele`'s substrate allocator (`withString`), avoiding redundant `malloc`/`free` exports.
+  - Migrated build to centralized `make wasm` in `external/mk/include.mk` with post-link `wasm-opt -O3` optimization (dropping binary size to 44 KB).
+
 ## [1.7.0]
 
 - **In-WASM Xylem Hook Dispatcher (`src/libxylem-wasm.c`, `include/ttypt/xy-mod.h`)**:
@@ -178,7 +186,7 @@
 - **Renamed `libndx` → `libxylem`**: the `ndx_*` API and headers (`include/ttypt/ndx.h` → `xy.h`, `ndx-mod.h` → `xy-mod.h`, `ndx-pp.h` → `xy-pp.h`, `ndx-watch.h` → `xy-watch.h`; `ndx.pc` → `xylem.pc`). Region/pledge/intercept surface and the `XY_DECL`/`XY_DEF`/`XY_IMPL` module contract are unchanged, only the prefix.
 - **Faster `xy_call` dispatch**: hook-implementation check inlined, fast return-value copy, and a single-listener fast path.
 - **True in-place reload**: `xy_reload` re-inserts a module at its original dispatch position.
-- **Portable `dlopen`**: module loading goes through `qsys_dlopen` (`libqsys`) — POSIX on Unix, `LoadLibraryA` on Windows — trimming platform `#ifdef`s from the loader.
+- **Portable `dlopen`**: module loading goes through `stl_dlopen` (`libstele`) — POSIX on Unix, `LoadLibraryA` on Windows — trimming platform `#ifdef`s from the loader.
 - **Builds on macOS and OpenBSD**: the module-locality check (`module_symbol_is_local`) used `<link.h>` + `dlinfo(RTLD_DI_LINKMAP)`, which only exist on the ELF/BSD linkers — macOS ships neither and OpenBSD has no `link.h`, so both platforms failed to compile. The check now identifies a loaded object by base address where `dlinfo()` exists and falls back to file identity (`module_same_file`, string or `st_dev`/`st_ino`) elsewhere, so a reload's `.xylem-XXXXXX.so` copy and dyld's path canonicalisation (`/tmp` → `/private/tmp`, resolved symlinks) still compare as the same module. Also fixes the FreeBSD ≥ 13 base address compare, which used the `l_addr` load offset rather than `l_base`.
 - **Rust bindings** updated for the rename; audit/compliance cleanups and warning fixes.
 - `libqmap` → `libcorm` rename.

@@ -21,7 +21,7 @@ extern int xy_err_val;
 #include <stdio.h>
 #include <stdint.h>
 
-#include <ttypt/qsys.h>
+#include <ttypt/stele.h>
 #include <ttypt/corm.h>
 
 #include "papi.h"

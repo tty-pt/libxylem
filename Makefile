@@ -1,7 +1,11 @@
 all := libxylem
-LDLIBS-libxylem := -lqsys -lcorm
+LDLIBS-libxylem := -lstele -lcorm
 libxylem-obj-y := src/libxylem-module.o src/libxylem-dispatch.o src/libxylem-runtime.o
-LDLIBS-libxylem-watch := -lxylem -lqsys -lcorm -lpthread
+LDLIBS-libxylem-watch := -lxylem -lstele -lcorm -lpthread
+
+WASM_SRCS := src/libxylem-wasm.c
+WASM_EXPORTS := xy_areg xy_errno xy_strerror
+WASM_LDFLAGS += -Wl,--import-memory -Wl,--global-base=1048576
 
 include ../mk/include.mk
 

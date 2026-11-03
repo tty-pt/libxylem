@@ -1,19 +1,12 @@
-import { createRequire } from "node:module";
-import path from "node:path";
+import { loadWasmModule, loadNativeAddon, getSubstrate } from "@tty-pt/stele";
 
-let nativeBinding = null;
-try {
-  const req = createRequire(import.meta.url);
-  try {
-    nativeBinding = req("../build/Release/xylem_node.node");
-  } catch {}
-  if (!nativeBinding) {
-    try {
-      nativeBinding = req(path.join(process.cwd(), "build/Release/xylem_node.node"));
-    } catch {}
-  }
-} catch {
-  // In-memory fallback
+const nativeBinding = loadNativeAddon(import.meta.url, "xylem");
+let wasmInstance = null;
+
+export function getXylemWasm() {
+  if (wasmInstance) return wasmInstance;
+  wasmInstance = loadWasmModule(new URL("./xylem.wasm", import.meta.url));
+  return wasmInstance;
 }
 
 export class XylemBus {
@@ -24,6 +17,13 @@ export class XylemBus {
   register(name, listener) {
     if (nativeBinding && nativeBinding.registerHook) {
       nativeBinding.registerHook(name);
+    }
+    const wasm = getXylemWasm();
+    if (wasm && wasm.exports.xy_areg) {
+      const substrate = getSubstrate();
+      substrate.withString(name, (ptr) => {
+        wasm.exports.xy_areg(ptr, 0);
+      });
     }
     if (!this._hooks.has(name)) {
       this._hooks.set(name, []);
@@ -75,5 +75,5 @@ export function version() {
   if (nativeBinding && nativeBinding.version) {
     return nativeBinding.version();
   }
-  return "0.1.0";
+  return "1.7.1";
 }

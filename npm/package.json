@@ -1,6 +1,6 @@
 {
-  "name": "@ttypt/xylem",
-  "version": "0.1.0",
+  "name": "@tty-pt/xylem",
+  "version": "1.7.1",
   "type": "module",
   "description": "Universal Node.js and Browser bindings for libxylem dynamic module hook and event bus",
   "main": "dist/index.js",
@@ -15,9 +15,15 @@
   ],
   "scripts": {
     "build:native": "mkdir -p build/Release && gcc -O3 -fPIC -shared -I/usr/include/node -I../include native/xylem_napi.c -L../lib -Wl,-rpath,../lib -L/usr/lib -lxylem -o build/Release/xylem_node.node 2>/dev/null || true",
-    "build:wasm": "clang --target=wasm32-wasi -mexec-model=reactor -Wl,--no-entry -Wl,--allow-undefined -Wl,--export=malloc -Wl,--export=free -Wl,--export=xy_areg -Wl,--export=xy_errno -Wl,--export=xy_strerror -I../include -O3 -o dist/xylem.wasm ../src/libxylem-wasm.c",
+    "build:wasm": "make -C .. wasm",
     "build": "npm run build:native && npm run build:wasm",
     "test": "node --test tests/xylem.test.mjs"
+  },
+  "peerDependencies": {
+    "@tty-pt/stele": ">=1.5.0"
+  },
+  "devDependencies": {
+    "@tty-pt/stele": "^1.5.1"
   },
   "keywords": [
     "xylem",
