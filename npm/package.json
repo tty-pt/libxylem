@@ -5,6 +5,16 @@
   "description": "Universal Node.js and Browser bindings for libxylem dynamic module hook and event bus",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./bridge": {
+      "types": "./dist/bridge.d.ts",
+      "default": "./dist/bridge.js"
+    }
+  },
   "files": [
     "dist",
     "include",

@@ -77,3 +77,6 @@ export function version() {
   }
   return "1.7.1";
 }
+
+export { createXylemBridge } from "./bridge.js";
+
