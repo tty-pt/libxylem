@@ -34,10 +34,10 @@
     "test": "node --test tests/xylem.test.mjs"
   },
   "peerDependencies": {
-    "@tty-pt/stele": ">=1.5.0"
+    "@tty-pt/stele": ">=1.6.0"
   },
   "devDependencies": {
-    "@tty-pt/stele": "^1.5.2"
+    "@tty-pt/stele": "^1.6.0"
   },
   "keywords": [
     "xylem",
