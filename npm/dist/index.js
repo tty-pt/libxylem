@@ -17,13 +17,14 @@ export class XylemBus {
   register(name, listener) {
     if (nativeBinding && nativeBinding.registerHook) {
       nativeBinding.registerHook(name);
-    }
-    const wasm = getXylemWasm();
-    if (wasm && wasm.exports.xy_areg) {
-      const substrate = getSubstrate();
-      substrate.withString(name, (ptr) => {
-        wasm.exports.xy_areg(ptr, 0);
-      });
+    } else {
+      const wasm = getXylemWasm();
+      if (wasm && wasm.exports.xy_areg) {
+        const substrate = getSubstrate();
+        substrate.withString(name, (ptr) => {
+          wasm.exports.xy_areg(ptr, 0);
+        });
+      }
     }
     if (!this._hooks.has(name)) {
       this._hooks.set(name, []);
@@ -77,3 +78,6 @@ export function version() {
   }
   return "1.7.1";
 }
+
+export { createXylemBridge } from "./bridge.js";
+

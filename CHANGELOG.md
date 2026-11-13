@@ -1,3 +1,14 @@
+## [Unreleased] (target: v1.8.0)
+
+### Added
+- **Web HAL Capability Bridge Standardizations (`npm/dist/bridge.js`, `htdocs/xylem-bridge.js`)**:
+  - Exported standard capability bridge under `@tty-pt/xylem`.
+  - Added full TypeScript definitions in `npm/dist/bridge.d.ts`.
+  - Added comprehensive bridge tests in `npm/tests/xylem.test.mjs`.
+
+### Changed
+- Updated package exports in `npm/package.json` to expose the capability bridge.
+
 ## [1.7.2] - 2026-11-03
 
 - **In-WASM Xylem Hook Dispatcher & Substrate Integration (`src/libxylem-wasm.c`, `include/ttypt/xy-mod.h`)**:

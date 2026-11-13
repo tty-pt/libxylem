@@ -1,0 +1,3 @@
+# Sanctioned WebAssembly imports for libxylem dynamic module loader
+xylem.wasm_xy_load_module
+xylem.wasm_xy_unload_module
