@@ -66,10 +66,10 @@ export function createXylemBridge(root, getWasm) {
 	};
 }
 
-if (typeof window !== 'undefined') {
-	window.__wasm_capability_registry = window.__wasm_capability_registry || {};
-	window.__wasm_capability_registry.xylem = (root, getWasm) => createXylemBridge(root, getWasm);
-	if (typeof window.registerWasmCapability === 'function') {
-		window.registerWasmCapability('xylem', createXylemBridge);
-	}
+const _xyGlobal = typeof window !== 'undefined' ? window : globalThis;
+_xyGlobal.__wasm_capability_registry = _xyGlobal.__wasm_capability_registry || {};
+_xyGlobal.__wasm_capability_registry.xylem = (root, getWasm) => createXylemBridge(root, getWasm);
+if (typeof _xyGlobal.registerWasmCapability === 'function') {
+	_xyGlobal.registerWasmCapability('xylem', createXylemBridge);
 }
+
