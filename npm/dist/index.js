@@ -14,15 +14,20 @@ export class XylemBus {
     this._hooks = new Map();
   }
 
-  register(name, listener) {
-    if (nativeBinding && nativeBinding.registerHook) {
+  register(name, listener, options = {}) {
+    if (!options.wasm && nativeBinding && nativeBinding.registerHook) {
       nativeBinding.registerHook(name);
     } else {
       const wasm = getXylemWasm();
       if (wasm && wasm.exports.xy_areg) {
         const substrate = getSubstrate();
         substrate.withString(name, (ptr) => {
-          wasm.exports.xy_areg(ptr, 0);
+          const adapterPtr = substrate.calloc(1, 32);
+          try {
+            wasm.exports.xy_areg(ptr, adapterPtr);
+          } finally {
+            substrate.free(adapterPtr);
+          }
         });
       }
     }
