@@ -13,3 +13,6 @@ export declare const defaultBus: XylemBus;
 export declare function areg(name: string, listener: XylemListener): () => boolean;
 export declare function call(name: string, ...args: any[]): any[];
 export declare function version(): string;
+
+export { createXylemBridge, XylemBridge } from "./bridge.js";
+

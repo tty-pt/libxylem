@@ -1,3 +1,21 @@
+## [Unreleased]
+
+### Changed
+- **Libstele v1.7.0 Substrate Alignment (`npm/package.json`, `Makefile`)**:
+  - Upgraded `@tty-pt/stele` `peerDependencies` (`>=1.7.0`) and `devDependencies` (`^1.7.0`).
+  - Rebuilt `xylem.wasm` shared-memory reactor at a disjoint `--global-base` (`1048576`) to prevent linear memory collisions across co-loaded WASM modules.
+
+## [1.8.0] - 2026-11-13
+
+### Added
+- **Web HAL Capability Bridge Standardizations (`npm/dist/bridge.js`, `htdocs/xylem-bridge.js`)**:
+  - Exported standard capability bridge under `@tty-pt/xylem`.
+  - Added full TypeScript definitions in `npm/dist/bridge.d.ts`.
+  - Added comprehensive bridge tests in `npm/tests/xylem.test.mjs`.
+
+### Changed
+- Updated package exports in `npm/package.json` to expose the capability bridge.
+
 ## [1.7.2] - 2026-11-03
 
 - **In-WASM Xylem Hook Dispatcher & Substrate Integration (`src/libxylem-wasm.c`, `include/ttypt/xy-mod.h`)**:

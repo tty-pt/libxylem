@@ -13,6 +13,7 @@ jobs:
       run_tests: true
       deps: "libcorm"
       deps_pacman: "libstele,libcorm"
+      deps_winget: "mingw-w64-x86_64-xxhash"
       deps_winget_tty: "libstele,libcorm"
       publish_to: "deb,apk,rpm,pacman,brew,openbsd,winget"
     secrets: inherit
