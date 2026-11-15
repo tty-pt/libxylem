@@ -8,8 +8,8 @@
 ## [1.8.0] - 2026-11-13
 
 ### Added
-- **Web HAL Capability Bridge Standardizations (`npm/dist/bridge.js`, `htdocs/xylem-bridge.js`)**:
-  - Exported standard capability bridge under `@tty-pt/xylem`.
+- **Web HAL Capability Bridge Standardizations (`npm/dist/bridge.js`, `htdocs/xylem-bridge.js`, `htdocs/xylem-cap.js`)**:
+  - Exported standard capability bridge (`createXylemBridge`) and browser capability module (`htdocs/xylem-cap.js`) under `@tty-pt/xylem`.
   - Added full TypeScript definitions in `npm/dist/bridge.d.ts`.
   - Added comprehensive bridge tests in `npm/tests/xylem.test.mjs`.
 

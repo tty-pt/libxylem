@@ -50,9 +50,10 @@ Dynamic module hook and lifecycle event bus.
 * `.unregister(name: string, listener: Function): boolean`: Unregisters specific listener.
 * `.list(): string[]`: Lists all registered hook names.
 
-### Standalone Functions
+### Standalone Functions & Capability Bridge
 * `areg(name: string, listener: Function): () => boolean`: Registers listener on the global default bus.
 * `call(name: string, ...args: any[]): any[]`: Dispatches hook on the global default bus.
+* `createXylemBridge(options?)` (`@tty-pt/xylem/bridge`): Registers Web HAL `xy_*` hook dispatch imports on a Stele `CapabilityRegistry` or WASM environment.
 * `getXylemWasm(): WebAssembly.Instance`: Returns the WebAssembly instance loaded on the Stele shared-memory substrate.
 * `version(): string`: Returns the library semantic version string.
 
