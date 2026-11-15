@@ -213,11 +213,11 @@ void xy_init_ctx(struct xy_ctx *ctx) {
 
 struct xy_ctx *get_xy_ptr(void) __attribute__((weak));
 
+AUTO_INIT
 void xy_wasm_init(void) {
 	if (get_xy_ptr) {
 		struct xy_ctx *p = get_xy_ptr();
 		if (p) xy_init_ctx(p);
 	}
 }
-AUTO_INIT
 void (*xy_wasm_init_p)(void) = xy_wasm_init;

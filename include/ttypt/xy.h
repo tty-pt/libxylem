@@ -167,17 +167,7 @@ typedef void (*mod_cb_t)(void);
   #define XY_MODULE_API __attribute__((visibility("default")))
 #endif
 
-#if defined(__APPLE__)
-  /**
-   * @brief Mach-O equivalent of .init_array for macOS.
-   */
-  #define AUTO_INIT __attribute__((used)) __attribute__((section("__DATA,__mod_init_func")))
-#else
-  /**
-   * @brief ELF section for initialization pointers.
-   */
-  #define AUTO_INIT __attribute__((used)) __attribute__((section(".init_array")))
-#endif
+#define AUTO_INIT __attribute__((used)) __attribute__((constructor))
 
 #define __XY_DISPATCH(retp, adapterp, argp) \
 	xy_call((retp), (adapterp), (argp))
@@ -277,10 +267,10 @@ typedef void (*mod_cb_t)(void);
 		.call = &fname##_adapter_call, \
 		.hook_id = -1, \
 	}; \
+	AUTO_INIT \
 	void fname##_adapter_reg(void) { \
 		xy_areg(XSTR(fname), &fname##_adapter); \
 	} \
-	AUTO_INIT \
 	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg
 
 /**
@@ -342,10 +332,10 @@ typedef void (*mod_cb_t)(void);
 		.call = &fname##_adapter_call, \
 		.hook_id = -1, \
 	}; \
+	AUTO_INIT \
 	void fname##_adapter_reg(void) { \
 		xy_areg(XSTR(fname), &fname##_adapter); \
 	} \
-	AUTO_INIT \
 	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg; \
 	ftype fname(XY_FA(__VA_ARGS__))
 
@@ -386,10 +376,10 @@ typedef void (*mod_cb_t)(void);
 		.call = &fname##_##tag##_adapter_call, \
 		.hook_id = -1, \
 	}; \
+	AUTO_INIT \
 	static void fname##_##tag##_adapter_reg(void) { \
 		xy_areg(XSTR(fname), &fname##_##tag##_adapter); \
 	} \
-	AUTO_INIT \
 	void (*fname##_##tag##_adapter_reg_p)(void) = fname##_##tag##_adapter_reg; \
 	static ftype fname##_##tag(XY_FA(__VA_ARGS__))
 
