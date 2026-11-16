@@ -11,15 +11,19 @@
 [![WebAssembly](https://img.shields.io/badge/WebAssembly-Reactor-654FF0?logo=webassembly)](#)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-success)](#)
 
-> Universal Node.js and Browser bindings for **`libxylem`**, the extensible C module bus and dynamic hook dispatch runtime.
+> Universal Node.js and Browser bindings for **`libxylem`**, the extensible C module bus and dynamic hook dispatch runtime. Canonical C header: `<ttypt/xylem.h>`.
+
+📖 **Full C & Module Bus Documentation**: See the main [**libxylem GitHub README**](https://github.com/tty-pt/libxylem#readme) for `XY_DECL` / `XY_IMPL` cross-`.so` symbol contracts, `xy_load()` DAG resolution, and hook dispatch.
 
 ---
 
-## 1. Quickstart
+## 1. Quickstart & Installation
 
 ```bash
 npm install @tty-pt/xylem
 ```
+
+**Native OS Packages (`tty.pt`)**: Prebuilt native C packages (`libxylem`) for Linux (`apt`, `apk`, `pacman`, `dnf`), macOS (`brew`), Windows (`winget`, MSYS2), and OpenBSD (`pkg_add`) are available via the [**tty.pt package repositories**](https://github.com/tty-pt/ci/blob/main/docs/install.md).
 
 ```typescript
 import { XylemBus, areg, call } from "@tty-pt/xylem";
@@ -59,7 +63,7 @@ Dynamic module hook and lifecycle event bus.
 
 ---
 
-## 3. C Development Headers via NPM
+## 3. C Development Headers & Native Integration
 
 ```makefile
 CFLAGS += -I./node_modules/@tty-pt/xylem/include
@@ -68,13 +72,6 @@ LDLIBS += -lxylem
 
 ---
 
-## 3. Building from Source
-
-```bash
-make npm-build    # Compiles native addon and WASM reactor
-make npm-test     # Runs verification test suite
-```
-
 ## License
 
-BSD 2-Clause License. Copyright (c) 2026, tty-pt.
+BSD-2-Clause — Copyright (c) 2026, Paulo Quirino <quirinpa@gmail.com>. See [LICENSE](https://github.com/tty-pt/libxylem/blob/main/LICENSE).
