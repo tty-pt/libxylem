@@ -4,7 +4,7 @@
 
 # @tty-pt/xylem
 
-[![npm version](https://img.shields.io/badge/npm-v1.7.2-CB3837?logo=npm)](#)
+[![npm version](https://img.shields.io/badge/npm-v1.8.0-CB3837?logo=npm)](#)
 [![License: BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![TypeScript Ready](https://img.shields.io/badge/TypeScript-Ready-3178C6?logo=typescript)](#)
 [![Node.js Native](https://img.shields.io/badge/Node.js-N--API-339933?logo=node.js)](#)
@@ -50,9 +50,10 @@ Dynamic module hook and lifecycle event bus.
 * `.unregister(name: string, listener: Function): boolean`: Unregisters specific listener.
 * `.list(): string[]`: Lists all registered hook names.
 
-### Standalone Functions
+### Standalone Functions & Capability Bridge
 * `areg(name: string, listener: Function): () => boolean`: Registers listener on the global default bus.
 * `call(name: string, ...args: any[]): any[]`: Dispatches hook on the global default bus.
+* `createXylemBridge(options?)` (`@tty-pt/xylem/bridge`): Registers Web HAL `xy_*` hook dispatch imports on a Stele `CapabilityRegistry` or WASM environment.
 * `getXylemWasm(): WebAssembly.Instance`: Returns the WebAssembly instance loaded on the Stele shared-memory substrate.
 * `version(): string`: Returns the library semantic version string.
 

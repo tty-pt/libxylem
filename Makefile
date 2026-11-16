@@ -5,7 +5,6 @@ LDLIBS-libxylem-watch := -lxylem -lstele -lcorm -lpthread
 
 WASM_SRCS := src/libxylem-wasm.c
 WASM_EXPORTS := xy_areg xy_errno xy_strerror
-WASM_LDFLAGS += -Wl,--import-memory -Wl,--global-base=1048576
 
 include ../mk/include.mk
 

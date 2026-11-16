@@ -19,7 +19,7 @@ export function createXylemBridge(root, getWasm) {
 		makeImports() {
 			return {
 				async wasm_xy_load_module(namePtr, nameLen) {
-					const exports = getWasm();
+					const exports = typeof getWasm === 'function' ? getWasm() : null;
 					if (!exports || !exports.memory) return -1;
 					const name = readStr(exports.memory, namePtr, nameLen);
 					if (loadedModules.has(name)) return 0;
@@ -51,7 +51,7 @@ export function createXylemBridge(root, getWasm) {
 					}
 				},
 				wasm_xy_unload_module(namePtr, nameLen) {
-					const exports = getWasm();
+					const exports = typeof getWasm === 'function' ? getWasm() : null;
 					if (!exports || !exports.memory) return -1;
 					const name = readStr(exports.memory, namePtr, nameLen);
 					const mod = loadedModules.get(name);
@@ -66,6 +66,10 @@ export function createXylemBridge(root, getWasm) {
 	};
 }
 
-if (typeof window !== 'undefined' && window.registerWasmCapability) {
-	window.registerWasmCapability('xylem', createXylemBridge);
+const _xyGlobal = typeof window !== 'undefined' ? window : globalThis;
+_xyGlobal.__wasm_capability_registry = _xyGlobal.__wasm_capability_registry || {};
+_xyGlobal.__wasm_capability_registry.xylem = (root, getWasm) => createXylemBridge(root, getWasm);
+if (typeof _xyGlobal.registerWasmCapability === 'function') {
+	_xyGlobal.registerWasmCapability('xylem', createXylemBridge);
 }
+

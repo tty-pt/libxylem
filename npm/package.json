@@ -1,10 +1,24 @@
 {
   "name": "@tty-pt/xylem",
-  "version": "1.7.2",
+  "version": "1.8.1",
   "type": "module",
   "description": "Universal Node.js and Browser bindings for libxylem dynamic module hook and event bus",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./cap": {
+      "types": "./dist/bridge.d.ts",
+      "default": "./dist/bridge.js"
+    },
+    "./bridge": {
+      "types": "./dist/bridge.d.ts",
+      "default": "./dist/bridge.js"
+    }
+  },
   "files": [
     "dist",
     "include",
@@ -20,10 +34,10 @@
     "test": "node --test tests/xylem.test.mjs"
   },
   "peerDependencies": {
-    "@tty-pt/stele": ">=1.5.0"
+    "@tty-pt/stele": ">=1.7.0"
   },
   "devDependencies": {
-    "@tty-pt/stele": "^1.5.2"
+    "@tty-pt/stele": "^1.7.0"
   },
   "keywords": [
     "xylem",
