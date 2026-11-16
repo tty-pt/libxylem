@@ -1,6 +1,6 @@
 {
   "name": "@tty-pt/xylem",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "type": "module",
   "description": "Universal Node.js and Browser bindings for libxylem dynamic module hook and event bus",
   "main": "dist/index.js",

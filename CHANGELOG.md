@@ -1,8 +1,8 @@
-## [Unreleased]
+## [1.8.1] - 2026-11-16
 
 ### Changed
-- **Libstele v1.7.0 Substrate Alignment (`npm/package.json`, `Makefile`)**:
-  - Upgraded `@tty-pt/stele` `peerDependencies` (`>=1.7.0`) and `devDependencies` (`^1.7.0`).
+- **Libstele v1.7.1 Substrate Alignment (`npm/package.json`, `Makefile`)**:
+  - Upgraded `@tty-pt/stele` `peerDependencies` (`>=1.7.0`) and `devDependencies` (`^1.7.0`) and rebuilt OS packages against `libstele` 1.7.1 and `libcorm` 2.4.2.
   - Rebuilt `xylem.wasm` shared-memory reactor at a disjoint `--global-base` (`1048576`) to prevent linear memory collisions across co-loaded WASM modules.
 
 ## [1.8.0] - 2026-11-13
